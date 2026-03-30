@@ -12,7 +12,6 @@ const (
 	StatusOK        StatusCode = 20000
 	StatusCreated   StatusCode = 20100
 	StatusNoContent StatusCode = 20400
-	StatusKeepGoing StatusCode = 30000
 
 	StatusFieldValidationError   StatusCode = 40000
 	StatusUnauthorized           StatusCode = 40100
@@ -25,8 +24,6 @@ const (
 	StatusScheduleNotFound       StatusCode = 40401
 	StatusTaskNotFound           StatusCode = 40403
 	StatusPromiseRecvNotFound    StatusCode = 40404
-	StatusTaskNotClaimed         StatusCode = 40901
-	StatusTaskInvalidVersion     StatusCode = 40902
 	StatusTaskPreconditionFailed StatusCode = 41200
 
 	// Platform level status (50000-59909)
@@ -46,8 +43,6 @@ func (s StatusCode) String() string {
 	switch s {
 	case StatusOK, StatusCreated, StatusNoContent:
 		return "The request was successful"
-	case StatusKeepGoing:
-		return "The request was successful (keep going)"
 	case StatusFieldValidationError:
 		return "The request is invalid"
 	case StatusUnauthorized:
@@ -62,10 +57,6 @@ func (s StatusCode) String() string {
 		return "The task counter is invalid"
 	case StatusTaskInvalidState:
 		return "The task state is invalid"
-	case StatusTaskNotClaimed:
-		return "The task state is invalid"
-	case StatusTaskInvalidVersion:
-		return "The task version is invalid"
 	case StatusTaskPreconditionFailed:
 		return "The task precondition failed"
 	case StatusPromiseNotFound:
@@ -98,5 +89,5 @@ func (s StatusCode) String() string {
 }
 
 func (s StatusCode) IsSuccessful() bool {
-	return s >= 20000 && s < 40000
+	return s >= 20000 && s < 30000
 }

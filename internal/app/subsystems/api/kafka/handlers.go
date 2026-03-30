@@ -213,7 +213,7 @@ func (s *server) handleCreateCallback(kafkaReq *KafkaRequest) {
 		return
 	}
 
-	res, error := s.processRequest(kafkaReq, &t_api.CallbackCreateRequest{
+	res, error := s.processRequest(kafkaReq, &t_api.PromiseRegisterRequest{
 		Id:        util.ResumeId(payload.RootPromiseID, payload.PromiseID),
 		PromiseId: payload.PromiseID,
 		Recv:      payload.Recv,
@@ -225,7 +225,7 @@ func (s *server) handleCreateCallback(kafkaReq *KafkaRequest) {
 		return
 	}
 
-	responseData := res.(*t_api.CallbackCreateResponse)
+	responseData := res.(*t_api.PromiseRegisterResponse)
 	responseBytes, err := json.Marshal(map[string]any{
 		"callback": responseData.Callback,
 		"promise":  responseData.Promise,
@@ -252,7 +252,7 @@ func (s *server) handleCreateSubscription(kafkaReq *KafkaRequest) {
 		return
 	}
 
-	res, error := s.processRequest(kafkaReq, &t_api.CallbackCreateRequest{
+	res, error := s.processRequest(kafkaReq, &t_api.PromiseRegisterRequest{
 		Id:        util.NotifyId(payload.PromiseID, payload.ID),
 		PromiseId: payload.PromiseID,
 		Recv:      payload.Recv,
@@ -264,7 +264,7 @@ func (s *server) handleCreateSubscription(kafkaReq *KafkaRequest) {
 		return
 	}
 
-	responseData := res.(*t_api.CallbackCreateResponse)
+	responseData := res.(*t_api.PromiseRegisterResponse)
 	responseBytes, err := json.Marshal(map[string]any{
 		"callback": responseData.Callback,
 		"promise":  responseData.Promise,
