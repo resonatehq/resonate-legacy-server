@@ -33,3 +33,6 @@
 # Cloned test repos
 test/resonate-test
 test/resonate-perf
+
+# Git worktrees
+.worktrees/

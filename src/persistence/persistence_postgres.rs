@@ -1232,6 +1232,7 @@ impl Db for PostgresDb<'_> {
               SET timeout_at = $3 + tt.ttl
               FROM task_data td
               JOIN tasks t ON t.id = td.id AND t.version = td.version AND t.state = 'acquired'
+              JOIN promises p ON p.id = td.id AND p.state = 'pending' AND p.timeout_at > $3
               WHERE tt.id = td.id AND tt.process_id = $4
               RETURNING tt.id
             )
@@ -1738,12 +1739,13 @@ impl Db for PostgresDb<'_> {
         schedule_id: &str,
         fired_at: i64,
         next_run_at: i64,
+        time: i64,
         promise_tags: &std::collections::HashMap<String, String>,
     ) -> StorageResult<Option<ScheduleRecord>> {
         let trt = self.task_retry_timeout;
         let promise_tags_json = serde_json::to_string(promise_tags).unwrap();
         // Template substitution and address extraction happen inside the CTE.
-        // $1=schedule_id, $2=fired_at, $3=next_run_at, $4=promise_tags
+        // $1=schedule_id, $2=fired_at, $3=next_run_at, $4=promise_tags, $5=time
         let rows = rt_block_on(sqlx::query(&format!("
             WITH fired_stimeout AS (
               SELECT st.id
@@ -1763,7 +1765,8 @@ impl Db for PostgresDb<'_> {
               INSERT INTO promises (id, state, param_headers, param_data, tags, timeout_at, created_at)
               SELECT s.computed_promise_id, 'pending',
                 s.promise_param_headers, s.promise_param_data, $4::jsonb,
-                s.computed_timeout_at, $2
+                s.computed_timeout_at,
+                CASE WHEN $5 >= s.computed_timeout_at THEN s.computed_timeout_at ELSE $5 END
               FROM schedule s
               ON CONFLICT (id) DO NOTHING
               RETURNING *
@@ -1815,6 +1818,7 @@ impl Db for PostgresDb<'_> {
             .bind(fired_at)          // $2
             .bind(next_run_at)       // $3
             .bind(promise_tags_json) // $4
+            .bind(time)              // $5
             .fetch_all(self.tx().as_mut()))?;
 
         if rows.is_empty() {
@@ -1956,6 +1960,9 @@ impl Db for PostgresDb<'_> {
 
     // D-04: debug.snap — multiple simple queries
     fn snap(&self) -> StorageResult<Snapshot> {
+        // REPEATABLE READ so all snap statements see the same consistent snapshot.
+        rt_block_on(sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .execute(self.tx().as_mut()))?;
         let promise_rows = rt_block_on(sqlx::query(
             "SELECT id, state, param_headers::text, param_data, value_headers::text, value_data, tags::text, timeout_at, created_at, settled_at FROM promises ORDER BY id")
             .fetch_all(self.tx().as_mut()))?;

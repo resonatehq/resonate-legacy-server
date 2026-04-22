@@ -863,11 +863,12 @@ impl<'a> Db for SqliteDb<'a> {
                 continue;
             }
 
-            // Update timeout only if task is acquired at right version by right pid
+            // Update timeout only if task is acquired at right version/pid and promise is still active
             self.conn.execute(
                 "UPDATE task_timeouts SET timeout_at = ?1 + ttl
                  WHERE id = ?2 AND process_id = ?3
-                   AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = ?2 AND t.version = ?4 AND t.state = 'acquired')",
+                   AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = ?2 AND t.version = ?4 AND t.state = 'acquired')
+                   AND EXISTS (SELECT 1 FROM promises p WHERE p.id = ?2 AND p.state = 'pending' AND p.timeout_at > ?1)",
                 params![time, task_id, pid, version],
             )?;
         }
@@ -1117,7 +1118,8 @@ impl<'a> Db for SqliteDb<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT t.id, t.state, t.version,
                     CASE WHEN tt.timeout_type = 1 THEN tt.ttl ELSE NULL END,
-                    CASE WHEN tt.timeout_type = 1 THEN tt.process_id ELSE NULL END
+                    CASE WHEN tt.timeout_type = 1 THEN tt.process_id ELSE NULL END,
+                    COALESCE((SELECT COUNT(*) FROM callbacks c WHERE c.awaiter_id = t.id AND c.ready = true), 0) AS resumes
              FROM tasks t LEFT JOIN task_timeouts tt ON tt.id = t.id
              WHERE (?1 IS NULL OR t.state = ?1) AND (?2 IS NULL OR t.id > ?2)
              ORDER BY t.id ASC LIMIT ?3",
@@ -1130,7 +1132,7 @@ impl<'a> Db for SqliteDb<'a> {
                 id: row.get(0)?,
                 state: parse_task_state(&state_str),
                 version: row.get(2)?,
-                resumes: 0,
+                resumes: row.get(5)?,
                 ttl: row.get::<_, Option<i64>>(3).ok().flatten(),
                 pid: row.get::<_, Option<String>>(4).ok().flatten(),
             });
@@ -1245,6 +1247,7 @@ impl<'a> Db for SqliteDb<'a> {
         schedule_id: &str,
         fired_at: i64,
         next_run_at: i64,
+        time: i64,
         promise_tags: &std::collections::HashMap<String, String>,
     ) -> StorageResult<Option<ScheduleRecord>> {
         // Step 1: Guard check — idempotency
@@ -1272,6 +1275,7 @@ impl<'a> Db for SqliteDb<'a> {
             .replace("{{.id}}", &schedule.id)
             .replace("{{.timestamp}}", &fired_at.to_string());
         let promise_timeout_at = fired_at + schedule.promise_timeout;
+        let created_at = if time >= promise_timeout_at { promise_timeout_at } else { time };
 
         // Step 5: Create promise
         let ph = schedule
@@ -1283,7 +1287,7 @@ impl<'a> Db for SqliteDb<'a> {
         self.conn.execute(
             "INSERT OR IGNORE INTO promises (id, state, param_headers, param_data, tags, timeout_at, created_at)
              VALUES (?1, 'pending', ?2, ?3, ?4, ?5, ?6)",
-            params![promise_id, ph, schedule.promise_param.data, tags_json, promise_timeout_at, fired_at],
+            params![promise_id, ph, schedule.promise_param.data, tags_json, promise_timeout_at, created_at],
         )?;
         let promise_inserted = self.conn.changes() > 0;
 

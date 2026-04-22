@@ -17,8 +17,9 @@ use crate::auth;
 use crate::config::Config;
 use crate::metrics;
 use crate::persistence::{
-    PromiseCreateParams, PromiseSettleParams, ScheduleCreateParams, Storage, TaskAcquireParams,
-    TaskCreateParams, TaskFenceCreateParams, TaskFenceSettleParams, TaskFulfillParams,
+    PromiseCreateParams, PromiseSettleParams, ScheduleCreateParams, Storage, StorageError,
+    TaskAcquireParams, TaskCreateParams, TaskFenceCreateParams, TaskFenceSettleParams,
+    TaskFulfillParams,
 };
 use crate::processing::processing_timeouts;
 use crate::transport::transport_http_poll::PollRegistry;
@@ -46,11 +47,12 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config, auth: Option<auth::AuthConfig>, storage: Storage) -> Self {
+        let debug = config.debug;
         Self {
             config,
             storage: Arc::new(storage),
             auth,
-            debug_mode: AtomicBool::new(false),
+            debug_mode: AtomicBool::new(debug),
         }
     }
 }
@@ -146,6 +148,11 @@ fn into_response(resp: ResponseEnvelope) -> (axum::http::StatusCode, Json<Respon
     let code = axum::http::StatusCode::from_u16(resp.head.status as u16)
         .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
     (code, Json(resp))
+}
+
+fn storage_err_response(kind: String, corr_id: String, e: StorageError) -> ResponseEnvelope {
+    let status = if matches!(e, StorageError::Serialization) { 503 } else { 500 };
+    ResponseEnvelope::error(kind, corr_id, status, &format!("Internal error: {}", e))
 }
 
 /// Best-effort extraction of `kind` and `corrId` from a raw JSON body for
@@ -403,7 +410,7 @@ impl Drop for PollGuard {
     }
 }
 
-async fn dispatch(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> ResponseEnvelope {
+pub async fn dispatch(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> ResponseEnvelope {
     let kind = req.kind.as_str();
 
     match kind {
@@ -539,12 +546,7 @@ async fn op_promise_get(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -652,12 +654,7 @@ async fn op_promise_create(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -749,12 +746,7 @@ async fn op_promise_settle(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -838,12 +830,7 @@ async fn op_promise_register_callback(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -919,12 +906,7 @@ async fn op_promise_register_listener(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -1002,12 +984,7 @@ async fn op_promise_search(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -1070,12 +1047,7 @@ async fn op_task_get(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> Re
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -1313,12 +1285,7 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -1435,12 +1402,7 @@ async fn op_task_acquire(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -1531,12 +1493,7 @@ async fn op_task_release(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -1661,12 +1618,7 @@ async fn op_task_fulfill(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -1780,12 +1732,7 @@ async fn op_task_suspend(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -2041,12 +1988,7 @@ async fn op_task_fence(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> 
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -2098,16 +2040,11 @@ async fn op_task_heartbeat(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
-async fn op_task_halt(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> ResponseEnvelope {
+async fn op_task_halt(state: &Arc<Server>, req: &RequestEnvelope, _now: i64) -> ResponseEnvelope {
     let data = req.data.clone();
     let kind_str = req.kind.clone();
     let corr_id = req.head.corr_id.clone();
@@ -2133,7 +2070,6 @@ async fn op_task_halt(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> R
                     &format_validation_errors(&e),
                 ));
             }
-            db.try_timeout(&[&r.id], now)?;
             let result = db.task_halt(&r.id)?;
             if !result.task_exists {
                 tracing::debug!(task_id = %r.id, "Task halt: not found");
@@ -2164,12 +2100,7 @@ async fn op_task_halt(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> R
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -2203,7 +2134,6 @@ async fn op_task_continue(
                     &format_validation_errors(&e),
                 ));
             }
-            db.try_timeout(&[&r.id], now)?;
             let result = db.task_continue(&r.id, now)?;
             match result.state {
                 None => {
@@ -2239,12 +2169,7 @@ async fn op_task_continue(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -2312,12 +2237,7 @@ async fn op_task_search(state: &Arc<Server>, req: &RequestEnvelope, _now: i64) -
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -2383,12 +2303,7 @@ async fn op_schedule_get(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -2468,12 +2383,7 @@ async fn op_schedule_create(
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -2524,12 +2434,7 @@ async fn op_schedule_delete(state: &Arc<Server>, req: &RequestEnvelope) -> Respo
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 
@@ -2599,12 +2504,7 @@ async fn op_schedule_search(state: &Arc<Server>, req: &RequestEnvelope) -> Respo
         .await
     {
         Ok(resp) => resp,
-        Err(e) => ResponseEnvelope::error(
-            req.kind.clone(),
-            req.head.corr_id.clone(),
-            500,
-            &format!("Internal error: {}", e),
-        ),
+        Err(e) => storage_err_response(req.kind.clone(), req.head.corr_id.clone(), e),
     }
 }
 

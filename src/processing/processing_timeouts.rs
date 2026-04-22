@@ -46,12 +46,14 @@ pub async fn timeout_processing_loop(
 ///
 /// Called by the background loop and `debug.tick`.
 pub fn process_all_timeouts(db: &dyn Db, time: i64) -> StorageResult<()> {
-    // Run the three tick CTE statements (promise timeouts, task retry, task lease)
     tracing::debug!(time = time, "Processing expired timeouts");
     db.process_timeouts(time)?;
 
-    // Process expired schedules (application-level cron computation)
+    // Schedule firing happens after promise timeouts so that any promises
+    // created here with a timeout already in the past get settled immediately
+    // in the second process_timeouts call below.
     process_schedule_timeouts(db, time)?;
+    db.process_timeouts(time)?;
 
     Ok(())
 }
@@ -71,7 +73,7 @@ fn process_schedule_timeouts(db: &dyn Db, time: i64) -> StorageResult<()> {
         let mut promise_tags = schedule.promise_tags.clone();
         promise_tags.insert("resonate:schedule".to_string(), schedule_id.clone());
 
-        match db.process_schedule_timeout(schedule_id, *fired_at, next_run_at, &promise_tags)? {
+        match db.process_schedule_timeout(schedule_id, *fired_at, next_run_at, time, &promise_tags)? {
             Some(_) => {
                 tracing::info!(
                     schedule_id = %schedule_id,
