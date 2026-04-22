@@ -12,12 +12,13 @@ mod util;
 
 use std::sync::Arc;
 
-use axum::{routing::get, Router};
+use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use clap::{Parser, Subcommand};
 use config::Config;
 use persistence::{persistence_sqlite::SqliteStorage, Storage};
 use server::Server;
 use transport::transport_http_poll::PollRegistry;
+use types::ResponseEnvelope;
 
 #[derive(Parser)]
 #[command(
@@ -288,6 +289,9 @@ async fn run_server(config: Config) -> Result<(), String> {
     };
     let app = server::api_routes()
         .merge(server::poll_routes())
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            handle_panic,
+        ))
         .layer(
             tower_http::trace::TraceLayer::new_for_http()
                 .make_span_with(
@@ -331,6 +335,19 @@ async fn run_server(config: Config) -> Result<(), String> {
 
     tracing::info!("Resonate Server stopped");
     Ok(())
+}
+
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let message = if let Some(s) = err.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "internal server error".to_string()
+    };
+    tracing::error!(message = %message, "panic in request handler");
+    let body = ResponseEnvelope::error("unknown".to_string(), "0".to_string(), 500, &message);
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
 }
 
 /// Wait for SIGINT or SIGTERM to initiate graceful shutdown.

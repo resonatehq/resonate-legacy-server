@@ -614,7 +614,7 @@ async fn op_promise_create(
                 .headers
                 .as_ref()
                 .map(|h| serde_json::to_string(h).unwrap());
-            let promise = db.promise_create(&PromiseCreateParams {
+            let result = db.promise_create(&PromiseCreateParams {
                 id: &r.id,
                 state: state.as_str(),
                 param_headers: param_headers_json.as_deref(),
@@ -626,27 +626,26 @@ async fn op_promise_create(
                 already_timedout,
                 address,
             })?;
-            let is_new = promise.created_at == created_at;
-            if is_new {
+            if result.was_created {
                 tracing::info!(
-                    promise_id = %promise.id,
-                    state = %promise.state,
-                    timeout_at = promise.timeout_at,
+                    promise_id = %result.promise.id,
+                    state = %result.promise.state,
+                    timeout_at = result.promise.timeout_at,
                     target = address.unwrap_or("none"),
                     already_timedout = already_timedout,
                     "Promise created"
                 );
             } else {
                 tracing::debug!(
-                    promise_id = %promise.id,
-                    state = %promise.state,
+                    promise_id = %result.promise.id,
+                    state = %result.promise.state,
                     "Promise create: already exists (idempotent)"
                 );
             }
             Ok(ResponseEnvelope::success(
                 kind_str.clone(),
                 corr_id.clone(),
-                &PromiseResponseData { promise },
+                &PromiseResponseData { promise: result.promise },
             ))
         })
         .await
@@ -729,6 +728,7 @@ async fn op_promise_settle(
                             "Promise settle: already settled (idempotent)"
                         );
                     }
+                    assert_ne!(promise.state, PromiseState::Pending, "invariant: returning 200 but promise is still pending");
                     Ok(ResponseEnvelope::success(
                         kind_str.clone(),
                         corr_id.clone(),
@@ -1150,7 +1150,7 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
                 .headers
                 .as_ref()
                 .map(|h| serde_json::to_string(h).unwrap());
-            let result = db.task_create(&TaskCreateParams {
+            let res = db.task_create(&TaskCreateParams {
                 promise_id: action_id,
                 state: p_state.as_str(),
                 param_headers: param_headers_json.as_deref(),
@@ -1163,16 +1163,6 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
                 ttl: r.ttl,
                 pid: &r.pid,
             })?;
-            if result.is_none() {
-                tracing::debug!(task_id = %action_id, "Task create: underlying promise not found");
-                return Ok(ResponseEnvelope::error(
-                    kind_str.clone(),
-                    corr_id.clone(),
-                    404,
-                    "Promise not found",
-                ));
-            }
-            let res = result.unwrap();
 
             // If the promise is settled, process callbacks as a separate
             // statement. This fires any callbacks registered by concurrent
@@ -1196,7 +1186,13 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
                     ttl: if task_state == TaskState::Fulfilled { None } else { Some(r.ttl) },
                     pid: if task_state == TaskState::Fulfilled { None } else { Some(r.pid.to_string()) },
                 };
-                let preload = db.compute_preload(action_id)?;
+                let preload = if task_state == TaskState::Acquired {
+                    db.compute_preload(action_id)?
+                } else {
+                    vec![]
+                };
+                assert!(res.promise.state != PromiseState::Pending || task_state != TaskState::Fulfilled, "invariant: pending promise with fulfilled task");
+                assert!(res.promise.state == PromiseState::Pending || task_state == TaskState::Fulfilled, "invariant: settled promise with non-fulfilled task");
                 return Ok(ResponseEnvelope::success(
                     kind_str.clone(),
                     corr_id.clone(),
@@ -1209,106 +1205,105 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
             }
 
             // CTE didn't create the task (promise already existed).
-            // Statement 2: try to acquire as a SEPARATE statement —
-            // gets a fresh READ COMMITTED snapshot that sees all
-            // concurrent commits (e.g. task.release making it pending).
-            let acquire_result = db.task_acquire(&TaskAcquireParams {
-                task_id: action_id,
-                version: 0,
-                time: now,
-                ttl: r.ttl,
-                pid: &r.pid,
-            })?;
-            if !acquire_result.was_acquired {
-                // Acquire with version 0 failed. Read current state
-                // (fresh snapshot) and retry with actual version.
-                let task = db.task_get(action_id)?;
-                match &task {
-                    None => {
-                        return Ok(ResponseEnvelope::error(
-                            kind_str.clone(),
-                            corr_id.clone(),
-                            422,
-                            "Promise exists without a target task",
-                        ));
-                    }
-                    Some(t) if t.state == TaskState::Fulfilled => {
+            // Branch on the state/version surfaced by the CTE.
+            match (res.task_state.as_deref(), res.task_version) {
+                (Some("fulfilled"), version) => {
+                    assert_ne!(res.promise.state, PromiseState::Pending, "invariant: pending promise with fulfilled task");
+                    let preload = db.compute_preload(action_id)?;
+                    Ok(ResponseEnvelope::success(
+                        kind_str.clone(),
+                        corr_id.clone(),
+                        &TaskCreateResponseData {
+                            task: TaskRecord {
+                                id: action_id.to_string(),
+                                state: TaskState::Fulfilled,
+                                version: version.unwrap_or(0),
+                                resumes: 0,
+                                ttl: None,
+                                pid: None,
+                            },
+                            promise: res.promise,
+                            preload,
+                        },
+                    ))
+                }
+                (Some("pending"), Some(version)) => {
+                    let acquire_result = db.task_acquire(&TaskAcquireParams {
+                        task_id: action_id,
+                        version,
+                        time: now,
+                        ttl: r.ttl,
+                        pid: &r.pid,
+                    })?;
+                    if acquire_result.was_acquired {
+                        let task = TaskRecord {
+                            id: action_id.to_string(),
+                            state: TaskState::Acquired,
+                            version: version + 1,
+                            resumes: 0,
+                            ttl: Some(r.ttl),
+                            pid: Some(r.pid.to_string()),
+                        };
+                        assert_eq!(res.promise.state, PromiseState::Pending, "invariant: settled promise with non-fulfilled task");
+                        assert_eq!(acquire_result.task_version, Some(version + 1), "invariant: acquired task version must be version + 1");
                         let preload = db.compute_preload(action_id)?;
-                        return Ok(ResponseEnvelope::success(
+                        Ok(ResponseEnvelope::success(
                             kind_str.clone(),
                             corr_id.clone(),
                             &TaskCreateResponseData {
-                                task: t.clone(),
+                                task,
                                 promise: res.promise,
                                 preload,
                             },
-                        ));
-                    }
-                    Some(t) if t.state == TaskState::Pending => {
-                        let retry = db.task_acquire(&TaskAcquireParams {
-                            task_id: action_id,
-                            version: t.version,
-                            time: now,
-                            ttl: r.ttl,
-                            pid: &r.pid,
-                        })?;
-                        if retry.was_acquired {
-                            let task = TaskRecord {
-                                id: action_id.to_string(),
-                                state: TaskState::Acquired,
-                                version: t.version + 1,
-                                resumes: 0,
-                                ttl: Some(r.ttl),
-                                pid: Some(r.pid.to_string()),
-                            };
-                            let preload = db.compute_preload(action_id)?;
-                            return Ok(ResponseEnvelope::success(
-                                kind_str.clone(),
-                                corr_id.clone(),
-                                &TaskCreateResponseData {
-                                    task,
-                                    promise: res.promise,
-                                    preload,
+                        ))
+                    } else if acquire_result.task_state == Some(TaskState::Fulfilled) {
+                        let promise = acquire_result.promise.expect("fulfilled task must have a promise");
+                        assert_ne!(promise.state, PromiseState::Pending, "invariant: fulfilled task cannot have a pending promise");
+                        let preload = db.compute_preload(action_id)?;
+                        Ok(ResponseEnvelope::success(
+                            kind_str.clone(),
+                            corr_id.clone(),
+                            &TaskCreateResponseData {
+                                task: TaskRecord {
+                                    id: action_id.to_string(),
+                                    state: TaskState::Fulfilled,
+                                    version: acquire_result.task_version.expect("invariant: fulfilled task must have a version"),
+                                    resumes: 0,
+                                    ttl: None,
+                                    pid: None,
                                 },
-                            ));
-                        }
-                        return Ok(ResponseEnvelope::error(
+                                promise,
+                                preload,
+                            },
+                        ))
+                    } else {
+                        assert!(acquire_result.task_state.is_some(), "invariant: non-acquired result must have a task state");
+                        assert!(acquire_result.task_version.is_some(), "invariant: non-acquired result must have a task version");
+                        assert!(
+                            acquire_result.task_state.unwrap() != TaskState::Pending || acquire_result.task_version.unwrap() != version,
+                            "invariant: task state must not be pending or version must differ from request"
+                        );
+                        Ok(ResponseEnvelope::error(
                             kind_str.clone(),
                             corr_id.clone(),
                             409,
                             "Already exists",
-                        ));
-                    }
-                    _ => {
-                        return Ok(ResponseEnvelope::error(
-                            kind_str.clone(),
-                            corr_id.clone(),
-                            409,
-                            "Already exists",
-                        ));
+                        ))
                     }
                 }
+                (None, _) => Ok(ResponseEnvelope::error(
+                    kind_str.clone(),
+                    corr_id.clone(),
+                    422,
+                    "Promise exists without a target task",
+                )),
+                _ => Ok(ResponseEnvelope::error(
+                    kind_str.clone(),
+                    corr_id.clone(),
+                    409,
+                    "Already exists",
+                )),
             }
-
-            // Acquired with version 1 (first claim)
-            let task = TaskRecord {
-                id: action_id.to_string(),
-                state: TaskState::Acquired,
-                version: 1,
-                resumes: 0,
-                ttl: Some(r.ttl),
-                pid: Some(r.pid.to_string()),
-            };
-            let preload = db.compute_preload(action_id)?;
-            Ok(ResponseEnvelope::success(
-                kind_str.clone(),
-                corr_id.clone(),
-                &TaskCreateResponseData {
-                    task,
-                    promise: res.promise,
-                    preload,
-                },
-            ))
         })
         .await
     {
@@ -1367,48 +1362,42 @@ async fn op_task_acquire(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -
                     ))
                 }
                 Some(promise) => {
+                    assert!(result.task_state.is_some(), "invariant: acquired result must have a task state");
+                    assert!(result.task_version.is_some(), "invariant: acquired result must have a task version");
+                    assert!(
+                        result.task_state.unwrap() != TaskState::Pending || result.task_version.unwrap() != r.version,
+                        "invariant: task state must not be pending or version must differ from request"
+                    );
                     if !result.was_acquired {
-                        let task = db.task_get(&r.id)?;
-                        if let Some(t) = task {
-                            if t.state != TaskState::Pending {
-                                tracing::debug!(
-                                    task_id = %r.id,
-                                    current_state = %t.state,
-                                    "Task acquire rejected: not pending"
-                                );
-                                return Ok(ResponseEnvelope::error(
-                                    kind_str.clone(),
-                                    corr_id.clone(),
-                                    409,
-                                    "Task is not pending",
-                                ));
-                            }
-                            if t.version != r.version {
-                                tracing::debug!(
-                                    task_id = %r.id,
-                                    expected_version = r.version,
-                                    actual_version = t.version,
-                                    "Task acquire rejected: version mismatch"
-                                );
-                                return Ok(ResponseEnvelope::error(
-                                    kind_str.clone(),
-                                    corr_id.clone(),
-                                    409,
-                                    "Version mismatch",
-                                ));
-                            }
+                        let state = result.task_state.unwrap();
+                        let version = result.task_version.unwrap();
+                        if state != TaskState::Pending {
+                            tracing::debug!(
+                                task_id = %r.id,
+                                current_state = %state,
+                                "Task acquire rejected: not pending"
+                            );
+                            return Ok(ResponseEnvelope::error(
+                                kind_str.clone(),
+                                corr_id.clone(),
+                                409,
+                                "Task is not pending",
+                            ));
                         }
                         tracing::debug!(
                             task_id = %r.id,
-                            "Task acquire rejected: could not acquire (concurrent modification)"
+                            expected_version = r.version,
+                            actual_version = version,
+                            "Task acquire rejected: version mismatch"
                         );
                         return Ok(ResponseEnvelope::error(
                             kind_str.clone(),
                             corr_id.clone(),
                             409,
-                            "Task is not pending",
+                            "Version mismatch",
                         ));
                     }
+                    assert_eq!(result.task_version, Some(r.version + 1), "invariant: acquired task version must be request version + 1");
                     // Use known values — no separate task_get that could
                     // see stale state from concurrent transactions.
                     let task = TaskRecord {
@@ -1471,61 +1460,41 @@ async fn op_task_release(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -
                 ));
             }
             db.try_timeout(&[&r.id], now)?;
-            let task = match db.task_get(&r.id)? {
-                Some(t) => t,
-                None => {
-                    tracing::debug!(task_id = %r.id, "Task release: task not found");
-                    return Ok(ResponseEnvelope::error(
-                        kind_str.clone(),
-                        corr_id.clone(),
-                        404,
-                        "Task not found",
-                    ))
-                }
-            };
-            if task.state != TaskState::Acquired {
-                tracing::debug!(
-                    task_id = %r.id,
-                    current_state = %task.state,
-                    "Task release rejected: task is not acquired"
-                );
+            let (_, task_exists) = db.lock_for_update(&r.id)?;
+            if !task_exists {
+                tracing::debug!(task_id = %r.id, "Task release: task not found");
                 return Ok(ResponseEnvelope::error(
                     kind_str.clone(),
                     corr_id.clone(),
-                    409,
-                    "Task is not acquired",
+                    404,
+                    "Task not found",
                 ));
             }
-            if task.version != r.version {
-                tracing::debug!(
-                    task_id = %r.id,
-                    expected_version = r.version,
-                    actual_version = task.version,
-                    "Task release rejected: version mismatch"
-                );
+            let result = db.task_release(&r.id, r.version, now, db.task_retry_timeout())?;
+            if result.task_released {
+                tracing::info!(task_id = %r.id, version = r.version, "Task released back to pending");
+                return Ok(ResponseEnvelope::new(
+                    kind_str.clone(),
+                    corr_id.clone(),
+                    200,
+                    serde_json::json!({}),
+                ));
+            }
+            if !result.task_exists {
+                tracing::debug!(task_id = %r.id, "Task release: task not found");
                 return Ok(ResponseEnvelope::error(
                     kind_str.clone(),
                     corr_id.clone(),
-                    409,
-                    "Version mismatch",
+                    404,
+                    "Task not found",
                 ));
             }
-            let released = db.task_release(&r.id, r.version, now, db.task_retry_timeout())?;
-            if !released {
-                tracing::debug!(task_id = %r.id, version = r.version, "Task release rejected: version mismatch or invalid state");
-                return Ok(ResponseEnvelope::error(
-                    kind_str.clone(),
-                    corr_id.clone(),
-                    409,
-                    "Task version mismatch or invalid state",
-                ));
-            }
-            tracing::info!(task_id = %r.id, version = r.version, "Task released back to pending");
-            Ok(ResponseEnvelope::new(
+            tracing::debug!(task_id = %r.id, version = r.version, "Task release rejected: version mismatch or invalid state");
+            Ok(ResponseEnvelope::error(
                 kind_str.clone(),
                 corr_id.clone(),
-                200,
-                serde_json::json!({}),
+                409,
+                "Task version mismatch or invalid state",
             ))
         })
         .await
@@ -1569,45 +1538,15 @@ async fn op_task_fulfill(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -
             let action_data = &r.action.data;
             db.try_timeout(&[&action_data.id], now)?;
             // Lock preamble: lock promise + task to prevent stale snapshot
-            // in precondition check and fulfillment CTE.
-            let _ = db.lock_for_update(&r.id)?;
-            let task = match db.task_get(&r.id)? {
-                Some(t) => t,
-                None => {
-                    tracing::debug!(task_id = %r.id, "Task fulfill: task not found");
-                    return Ok(ResponseEnvelope::error(
-                        kind_str.clone(),
-                        corr_id.clone(),
-                        404,
-                        "Task not found",
-                    ))
-                }
-            };
-            if task.state != TaskState::Acquired {
-                tracing::debug!(
-                    task_id = %r.id,
-                    current_state = %task.state,
-                    "Task fulfill rejected: task is not acquired"
-                );
+            // in fulfillment CTE.
+            let (_, task_exists) = db.lock_for_update(&r.id)?;
+            if !task_exists {
+                tracing::debug!(task_id = %r.id, "Task fulfill: task not found");
                 return Ok(ResponseEnvelope::error(
                     kind_str.clone(),
                     corr_id.clone(),
-                    409,
-                    "Task is not acquired",
-                ));
-            }
-            if task.version != r.version {
-                tracing::debug!(
-                    task_id = %r.id,
-                    expected_version = r.version,
-                    actual_version = task.version,
-                    "Task fulfill rejected: version mismatch"
-                );
-                return Ok(ResponseEnvelope::error(
-                    kind_str.clone(),
-                    corr_id.clone(),
-                    409,
-                    "Version mismatch",
+                    404,
+                    "Task not found",
                 ));
             }
             let value_headers_json = action_data
@@ -1624,6 +1563,15 @@ async fn op_task_fulfill(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -
                 value_data: action_data.value.data.as_deref(),
                 settled_at: now,
             })?;
+            if !result.task_exists {
+                tracing::debug!(task_id = %r.id, "Task fulfill: task not found");
+                return Ok(ResponseEnvelope::error(
+                    kind_str.clone(),
+                    corr_id.clone(),
+                    404,
+                    "Task not found",
+                ));
+            }
             if !result.task_fulfilled {
                 tracing::debug!(task_id = %r.id, version = r.version, "Task fulfill rejected: version mismatch or invalid state");
                 return Ok(ResponseEnvelope::error(
@@ -1633,30 +1581,20 @@ async fn op_task_fulfill(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -
                     "Task version mismatch or invalid state",
                 ));
             }
-            match result.promise {
-                Some(promise) => {
-                    tracing::info!(
-                        task_id = %r.id,
-                        version = r.version,
-                        promise_state = %promise.state,
-                        "Task fulfilled and promise settled"
-                    );
-                    Ok(ResponseEnvelope::success(
-                        kind_str.clone(),
-                        corr_id.clone(),
-                        &TaskFulfillResponseData { promise },
-                    ))
-                }
-                None => {
-                    tracing::warn!(task_id = %r.id, "Task fulfilled but promise not found");
-                    Ok(ResponseEnvelope::error(
-                        kind_str.clone(),
-                        corr_id.clone(),
-                        404,
-                        "Promise not found",
-                    ))
-                }
-            }
+            let promise = result.promise.expect("invariant: task exists implies promise exists");
+            assert!(result.task_fulfilled, "invariant: returning 200 but task is not fulfilled");
+            assert_ne!(promise.state, PromiseState::Pending, "invariant: returning 200 but promise is still pending");
+            tracing::info!(
+                task_id = %r.id,
+                version = r.version,
+                promise_state = %promise.state,
+                "Task fulfilled and promise settled"
+            );
+            Ok(ResponseEnvelope::success(
+                kind_str.clone(),
+                corr_id.clone(),
+                &TaskFulfillResponseData { promise },
+            ))
         })
         .await
     {
@@ -1922,14 +1860,11 @@ async fn op_task_fence(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> 
                         promise_id = %create_data.id,
                         "Task fence: promise.create executed"
                     );
-                    let inner_status = if result.promise.is_some() { 200 } else { 404 };
-                    let inner_data = match &result.promise {
-                        Some(p) => serde_json::json!({ "promise": p }),
-                        None => serde_json::json!("Promise not found"),
-                    };
+                    let p = result.promise.expect("invariant: promise.create result must have a promise");
+                    let inner_data = serde_json::json!({ "promise": p });
                     let inner_envelope = serde_json::json!({
                         "kind": action_kind,
-                        "head": { "corrId": corr_id, "status": inner_status, "version": "2026-04-01" },
+                        "head": { "corrId": corr_id, "status": 200, "version": "2026-04-01" },
                         "data": inner_data,
                     });
                     let preload = db.compute_preload(&r.id)?;
@@ -2005,7 +1940,10 @@ async fn op_task_fence(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> 
                     );
                     let inner_status = if result.promise.is_some() { 200 } else { 404 };
                     let inner_data = match &result.promise {
-                        Some(p) => serde_json::json!({ "promise": p }),
+                        Some(p) => {
+                            assert_ne!(p.state, PromiseState::Pending, "invariant: returning 200 but promise is still pending");
+                            serde_json::json!({ "promise": p })
+                        }
                         None => serde_json::json!("Promise not found"),
                     };
                     let inner_envelope = serde_json::json!({

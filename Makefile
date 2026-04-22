@@ -11,7 +11,8 @@ test: clone
 
 .PHONY: clean
 clean:
-	docker compose --profile all down -v
+	docker compose --profile all down -v --remove-orphans
+	docker network rm resonate 2>/dev/null || true
 	docker compose -f test/docker-compose.yml --profile all down -v
 
 
