@@ -1945,6 +1945,7 @@ impl Db for PostgresDb<'_> {
             released_tasks AS (
               UPDATE tasks SET state = 'pending'
               WHERE id IN (SELECT id FROM expired_lease)
+                AND state = 'acquired'
               RETURNING id, version
             ),
             updated_lease_ttimeout AS (
