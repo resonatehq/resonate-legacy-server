@@ -1564,7 +1564,7 @@ impl Db for PostgresDb<'_> {
             continued_task AS (
               UPDATE tasks SET state = 'pending'
               WHERE id = $1 AND state = 'halted'
-              RETURNING *
+              RETURNING id, version
             ),
             inserted_ttimeout AS (
               INSERT INTO task_timeouts (timeout_at, id, timeout_type, ttl)
@@ -1580,25 +1580,20 @@ impl Db for PostgresDb<'_> {
               ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, address = EXCLUDED.address
               RETURNING id
             )
-            SELECT t.state, EXISTS (SELECT 1 FROM continued_task) AS continued
-            FROM tasks t WHERE t.id = $1
+            SELECT
+              EXISTS (SELECT 1 FROM locked_task) AS task_exists,
+              EXISTS (SELECT 1 FROM continued_task) AS continued
         "
             ))
             .bind(task_id)
             .bind(time)
-            .fetch_optional(self.tx().as_mut()),
+            .fetch_one(self.tx().as_mut()),
         )?;
 
-        match row {
-            Some(r) => Ok(TaskContinueResult {
-                state: Some(parse_task_state(&r.get::<String, _>("state"))),
-                continued: r.get("continued"),
-            }),
-            None => Ok(TaskContinueResult {
-                state: None,
-                continued: false,
-            }),
-        }
+        Ok(TaskContinueResult {
+            task_exists: row.get::<bool, _>("task_exists"),
+            continued: row.get::<bool, _>("continued"),
+        })
     }
 
     // T-11: task.search — single query with resumes subquery

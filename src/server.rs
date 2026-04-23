@@ -2136,35 +2136,30 @@ async fn op_task_continue(
             }
             db.try_timeout(&[&r.id], now)?;
             let result = db.task_continue(&r.id, now)?;
-            match result.state {
-                None => {
-                    tracing::debug!(task_id = %r.id, "Task continue: not found");
-                    Ok(ResponseEnvelope::error(
-                        kind_str.clone(),
-                        corr_id.clone(),
-                        404,
-                        "Task not found",
-                    ))
-                }
-                Some(_state) => {
-                    if result.continued {
-                        tracing::info!(task_id = %r.id, "Task continued from halted state");
-                        Ok(ResponseEnvelope::new(
-                            kind_str.clone(),
-                            corr_id.clone(),
-                            200,
-                            serde_json::json!({}),
-                        ))
-                    } else {
-                        tracing::debug!(task_id = %r.id, "Task continue rejected: not halted");
-                        Ok(ResponseEnvelope::error(
-                            kind_str.clone(),
-                            corr_id.clone(),
-                            409,
-                            "Task is not halted",
-                        ))
-                    }
-                }
+            if !result.task_exists {
+                tracing::debug!(task_id = %r.id, "Task continue: not found");
+                Ok(ResponseEnvelope::error(
+                    kind_str.clone(),
+                    corr_id.clone(),
+                    404,
+                    "Task not found",
+                ))
+            } else if result.continued {
+                tracing::info!(task_id = %r.id, "Task continued from halted state");
+                Ok(ResponseEnvelope::new(
+                    kind_str.clone(),
+                    corr_id.clone(),
+                    200,
+                    serde_json::json!({}),
+                ))
+            } else {
+                tracing::debug!(task_id = %r.id, "Task continue rejected: not halted");
+                Ok(ResponseEnvelope::error(
+                    kind_str.clone(),
+                    corr_id.clone(),
+                    409,
+                    "Task is not halted",
+                ))
             }
         })
         .await

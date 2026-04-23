@@ -111,7 +111,7 @@ pub struct TaskHaltResult {
 }
 
 pub struct TaskContinueResult {
-    pub state: Option<TaskState>,
+    pub task_exists: bool,
     pub continued: bool,
 }
 
