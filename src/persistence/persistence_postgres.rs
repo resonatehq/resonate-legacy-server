@@ -1916,6 +1916,7 @@ impl Db for PostgresDb<'_> {
             WITH expired_retry AS (
               SELECT tt.id FROM task_timeouts tt JOIN tasks t ON t.id = tt.id
               WHERE tt.timeout_type = 0 AND tt.timeout_at <= $1 AND t.state = 'pending'
+              FOR UPDATE OF t, tt
             ),
             updated_retry_ttimeout AS (
               UPDATE task_timeouts SET timeout_at = $1 + {trt}, process_id = NULL
@@ -1941,11 +1942,11 @@ impl Db for PostgresDb<'_> {
             WITH expired_lease AS (
               SELECT tt.id FROM task_timeouts tt JOIN tasks t ON t.id = tt.id
               WHERE tt.timeout_type = 1 AND tt.timeout_at <= $1 AND t.state = 'acquired'
+              FOR UPDATE OF t, tt
             ),
             released_tasks AS (
               UPDATE tasks SET state = 'pending'
               WHERE id IN (SELECT id FROM expired_lease)
-                AND state = 'acquired'
               RETURNING id, version
             ),
             updated_lease_ttimeout AS (
