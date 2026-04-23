@@ -685,8 +685,6 @@ impl<'a> Db for SqliteDb<'a> {
             .promise_get(promise_id)?
             .unwrap_or_else(|| unreachable!("promise missing after insert in task_create"));
 
-        let mut task_created = false;
-
         if promise_inserted {
             if !already_timedout {
                 self.conn.execute(
@@ -705,25 +703,28 @@ impl<'a> Db for SqliteDb<'a> {
                 params![promise_id, task_state, task_version],
             )? > 0;
             if inserted {
-                task_created = true;
                 if !already_timedout {
                     self.conn.execute(
                         "INSERT OR REPLACE INTO task_timeouts (timeout_at, id, timeout_type, process_id, ttl) VALUES (?1, ?2, 1, ?3, ?4)",
                         params![created_at + ttl, promise_id, pid, ttl],
                     )?;
                 }
+                return Ok(TaskCreateResult {
+                    promise,
+                    task_created: true,
+                    task_state: Some(task_state.to_string()),
+                    task_version: Some(task_version),
+                });
             }
-        } else {
-            // Promise already existed — do NOT acquire here.
-            // The server handler will try to acquire as a separate step,
-            // consistent with the PostgreSQL path.
         }
 
-        // SQLite: read task state for the result
+        // Promise already existed — do NOT acquire here.
+        // The server handler will try to acquire as a separate step,
+        // consistent with the PostgreSQL path.
         let task_row = self.task_get(promise_id)?;
         Ok(TaskCreateResult {
             promise,
-            task_created,
+            task_created: false,
             task_state: task_row.as_ref().map(|t| t.state.to_string()),
             task_version: task_row.as_ref().map(|t| t.version),
         })

@@ -705,15 +705,11 @@ async fn op_promise_settle(
             })?;
             match result.promise {
                 Some(promise) => {
-                    if !result.was_settled && promise.state == PromiseState::Pending {
-                        tracing::debug!(promise_id = %r.id, "Promise settle: TOCTOU race detected, treating as not found");
-                        return Ok(ResponseEnvelope::error(
-                            kind_str.clone(),
-                            corr_id.clone(),
-                            404,
-                            "Promise not found",
-                        ));
-                    }
+                    assert_ne!(
+                        promise.state,
+                        PromiseState::Pending,
+                        "invariant: returning 200 but promise is still pending"
+                    );
                     if result.was_settled {
                         tracing::info!(
                             promise_id = %promise.id,
@@ -728,7 +724,6 @@ async fn op_promise_settle(
                             "Promise settle: already settled (idempotent)"
                         );
                     }
-                    assert_ne!(promise.state, PromiseState::Pending, "invariant: returning 200 but promise is still pending");
                     Ok(ResponseEnvelope::success(
                         kind_str.clone(),
                         corr_id.clone(),
@@ -1174,8 +1169,10 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
 
             // When the CTE created the task, use CTE result directly.
             if res.task_created {
-                let task_state_str = res.task_state.unwrap_or_default();
-                let task_state = task_state_str.parse::<TaskState>().unwrap_or(TaskState::Acquired);
+                let task_state_str = res.task_state.expect("invariant: task_state is Some when task_created");
+                let task_state = task_state_str.parse::<TaskState>().expect("invariant: task_state is a valid TaskState");
+                assert!(res.promise.state != PromiseState::Pending || task_state != TaskState::Fulfilled, "invariant: pending promise with fulfilled task");
+                assert!(res.promise.state == PromiseState::Pending || task_state == TaskState::Fulfilled, "invariant: settled promise with non-fulfilled task");
                 // Acquired tasks start at version 1 (first claim), fulfilled at 0
                 let task_version = if task_state == TaskState::Acquired { 1 } else { 0 };
                 let task = TaskRecord {
@@ -1191,8 +1188,6 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
                 } else {
                     vec![]
                 };
-                assert!(res.promise.state != PromiseState::Pending || task_state != TaskState::Fulfilled, "invariant: pending promise with fulfilled task");
-                assert!(res.promise.state == PromiseState::Pending || task_state == TaskState::Fulfilled, "invariant: settled promise with non-fulfilled task");
                 return Ok(ResponseEnvelope::success(
                     kind_str.clone(),
                     corr_id.clone(),
@@ -1209,7 +1204,6 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
             match (res.task_state.as_deref(), res.task_version) {
                 (Some("fulfilled"), version) => {
                     assert_ne!(res.promise.state, PromiseState::Pending, "invariant: pending promise with fulfilled task");
-                    let preload = db.compute_preload(action_id)?;
                     Ok(ResponseEnvelope::success(
                         kind_str.clone(),
                         corr_id.clone(),
@@ -1223,7 +1217,7 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
                                 pid: None,
                             },
                             promise: res.promise,
-                            preload,
+                            preload: vec![],
                         },
                     ))
                 }
@@ -1259,7 +1253,6 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
                     } else if acquire_result.task_state == Some(TaskState::Fulfilled) {
                         let promise = acquire_result.promise.expect("fulfilled task must have a promise");
                         assert_ne!(promise.state, PromiseState::Pending, "invariant: fulfilled task cannot have a pending promise");
-                        let preload = db.compute_preload(action_id)?;
                         Ok(ResponseEnvelope::success(
                             kind_str.clone(),
                             corr_id.clone(),
@@ -1273,7 +1266,7 @@ async fn op_task_create(state: &Arc<Server>, req: &RequestEnvelope, now: i64) ->
                                     pid: None,
                                 },
                                 promise,
-                                preload,
+                                preload: vec![],
                             },
                         ))
                     } else {
