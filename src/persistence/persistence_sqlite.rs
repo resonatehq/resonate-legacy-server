@@ -1122,16 +1122,15 @@ impl<'a> Db for SqliteDb<'a> {
             }
         }
 
-        match self.task_get(task_id)? {
-            Some(t) => Ok(TaskContinueResult {
-                state: Some(t.state),
-                continued,
-            }),
-            None => Ok(TaskContinueResult {
-                state: None,
-                continued: false,
-            }),
-        }
+        let task_exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1)",
+            params![task_id],
+            |r| r.get(0),
+        )?;
+        Ok(TaskContinueResult {
+            task_exists,
+            continued,
+        })
     }
 
     fn task_search(
