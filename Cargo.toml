@@ -36,4 +36,4 @@ validator = { version = "0.18", features = ["derive"] }
 url = "2"
 base64 = "0.22"
 google-cloud-pubsub = "0.33.1"
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace", "catch-panic"] }
