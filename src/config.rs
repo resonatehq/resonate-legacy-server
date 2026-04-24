@@ -60,19 +60,11 @@ fn default_level() -> String {
     "info".to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CorsConfig {
     /// Allowed origins. Empty = CORS disabled. Use ["*"] for permissive access.
     #[serde(default)]
     pub allow_origins: Vec<String>,
-}
-
-impl Default for CorsConfig {
-    fn default() -> Self {
-        Self {
-            allow_origins: vec![],
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
