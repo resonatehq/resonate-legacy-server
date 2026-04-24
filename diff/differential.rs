@@ -22,6 +22,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use resonate::types::TaskState;
 
@@ -201,7 +202,7 @@ async fn differential_random() {
 
     const MAX_STEPS: usize = 200_000;
     const BATCH_SIZE: usize = 200;
-    const PLATEAU_BATCHES: usize = 1_000;
+    const PLATEAU_BATCHES: usize = 20;
 
     let mut rng = fastrand::Rng::with_seed(0xc0ffee_dead_beef);
     let mut now = T0;
@@ -209,6 +210,7 @@ async fn differential_random() {
     let mut total_steps = 0usize;
     let mut seen_sigs: HashSet<(String, u16, u8)> = HashSet::new();
     let mut plateau_count = 0usize;
+    let mut timings: HashMap<(String, String), Vec<u64>> = HashMap::new();
 
     'outer: loop {
         reset_all(&backends, now).await;
@@ -243,7 +245,7 @@ async fn differential_random() {
                 &format!("BEFORE {ctx}"),
             );
 
-            let mut results = send_all(&backends, &envelope, now).await;
+            let mut results = send_all(&backends, &envelope, now, &mut timings).await;
             for (_, _, data) in &mut results {
                 normalize_resp(data);
             }
@@ -315,6 +317,50 @@ async fn differential_random() {
         ALL_OPS.len(),
         seen_sigs.len(),
     );
+
+    print_timing_summary(&mut timings, &backends);
+}
+
+fn print_timing_summary(
+    timings: &mut HashMap<(String, String), Vec<u64>>,
+    backends: &[(String, Backend)],
+) {
+    let backend_names: Vec<&str> = backends.iter().map(|(n, _)| n.as_str()).collect();
+    let op_w = ALL_OPS.iter().map(|s| s.len()).max().unwrap_or(20);
+    let cell_w = 16usize;
+
+    eprintln!("\n[diff] timing summary (mean / p99 µs):");
+    let header = format!(
+        "  {:<op_w$}  {}",
+        "operation",
+        backend_names.iter().map(|n| format!("{:>cell_w$}", n)).collect::<Vec<_>>().join("  ")
+    );
+    eprintln!("[diff] {header}");
+    eprintln!("[diff]   {}", "─".repeat(op_w + 2 + backend_names.len() * (cell_w + 2)));
+
+    for op in ALL_OPS {
+        let cells: Vec<String> = backend_names.iter().map(|name| {
+            let key = (name.to_string(), op.to_string());
+            if let Some(samples) = timings.get_mut(&key) {
+                samples.sort_unstable();
+                let mean_us = samples.iter().sum::<u64>() / samples.len() as u64 / 1000;
+                let p99_us = percentile(samples, 99.0) / 1000;
+                format!("{:>cell_w$}", format!("{mean_us}/{p99_us}µs"))
+            } else {
+                format!("{:>cell_w$}", "—")
+            }
+        }).collect();
+        eprintln!("[diff]   {:<op_w$}  {}", op, cells.join("  "));
+    }
+    eprintln!();
+}
+
+fn percentile(sorted: &[u64], p: f64) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let idx = ((sorted.len() as f64 * p / 100.0).ceil() as usize).saturating_sub(1);
+    sorted[idx.min(sorted.len() - 1)]
 }
 
 // ---------------------------------------------------------------------------
@@ -346,10 +392,15 @@ async fn send_all(
     backends: &[(String, Backend)],
     envelope: &RequestEnvelope,
     now: i64,
+    timings: &mut HashMap<(String, String), Vec<u64>>,
 ) -> Vec<(String, i32, Value)> {
     let mut out = Vec::new();
+    let kind = envelope.kind.clone();
     for (name, b) in backends {
+        let t0 = Instant::now();
         let resp = b.dispatch(envelope, now).await;
+        let ns = t0.elapsed().as_nanos() as u64;
+        timings.entry((name.clone(), kind.clone())).or_default().push(ns);
         out.push((name.clone(), resp.head.status, resp.data));
     }
     out
