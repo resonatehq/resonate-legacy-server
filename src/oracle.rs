@@ -1847,7 +1847,11 @@ impl Oracle {
                     let timeout_at = current_timeout + promise_timeout;
                     let already_timedout = current_timeout >= timeout_at;
                     let (state, created_at, settled_at) = if already_timedout {
-                        (Self::timeout_state(&tags), current_timeout, Some(timeout_at))
+                        (
+                            Self::timeout_state(&tags),
+                            current_timeout,
+                            Some(timeout_at),
+                        )
                     } else {
                         (PromiseState::Pending, current_timeout, None)
                     };

@@ -1970,11 +1970,7 @@ impl Db for MysqlDb<'_> {
 
         let already_timedout = time >= computed_timeout_at;
         let (state, settled_at, created_at): (&str, Option<i64>, i64) = if already_timedout {
-            (
-                "rejected_timedout",
-                Some(computed_timeout_at),
-                fired_at,
-            )
+            ("rejected_timedout", Some(computed_timeout_at), fired_at)
         } else {
             ("pending", None, fired_at)
         };
