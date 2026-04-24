@@ -1973,7 +1973,7 @@ impl Db for MysqlDb<'_> {
             (
                 "rejected_timedout",
                 Some(computed_timeout_at),
-                computed_timeout_at,
+                fired_at,
             )
         } else {
             ("pending", None, fired_at)

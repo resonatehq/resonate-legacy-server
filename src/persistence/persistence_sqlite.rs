@@ -1315,7 +1315,7 @@ impl<'a> Db for SqliteDb<'a> {
             (
                 "rejected_timedout",
                 Some(promise_timeout_at),
-                promise_timeout_at,
+                fired_at,
             )
         } else {
             ("pending", None, fired_at)

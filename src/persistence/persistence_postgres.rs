@@ -1774,7 +1774,7 @@ impl Db for PostgresDb<'_> {
                 CASE WHEN s.already_timedout THEN 'rejected_timedout' ELSE 'pending' END,
                 s.promise_param_headers, s.promise_param_data, $4::jsonb,
                 s.computed_timeout_at,
-                CASE WHEN s.already_timedout THEN s.computed_timeout_at ELSE $2 END,
+                $2,
                 CASE WHEN s.already_timedout THEN s.computed_timeout_at ELSE NULL END
               FROM schedule s
               ON CONFLICT (id) DO NOTHING
