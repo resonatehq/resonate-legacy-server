@@ -811,20 +811,12 @@ impl Oracle {
             }
             Some(t) => (t.state, t.version),
         };
-        if task_state != TaskState::Acquired {
+        if task_state != TaskState::Acquired || task_version != r.version {
             return ResponseEnvelope::error(
                 req.kind.clone(),
                 req.head.corr_id.clone(),
                 409,
-                "Task is not acquired",
-            );
-        }
-        if task_version != r.version {
-            return ResponseEnvelope::error(
-                req.kind.clone(),
-                req.head.corr_id.clone(),
-                409,
-                "Version mismatch",
+                "Task version mismatch or invalid state",
             );
         }
         let addr = self
@@ -863,20 +855,12 @@ impl Oracle {
             }
             Some(t) => (t.state, t.version),
         };
-        if task_state != TaskState::Acquired {
+        if task_state != TaskState::Acquired || task_version != r.version {
             return ResponseEnvelope::error(
                 req.kind.clone(),
                 req.head.corr_id.clone(),
                 409,
-                "Task is not acquired",
-            );
-        }
-        if task_version != r.version {
-            return ResponseEnvelope::error(
-                req.kind.clone(),
-                req.head.corr_id.clone(),
-                409,
-                "Version mismatch",
+                "Task version mismatch or invalid state",
             );
         }
         let promise_is_pending = match self.promises.get(&action.id) {

@@ -3,9 +3,17 @@ name = "resonate"
 version = "0.9.3"
 edition = "2021"
 
+[lib]
+name = "resonate"
+path = "src/lib.rs"
+
 [[bin]]
 name = "resonate"
 path = "src/main.rs"
+
+[[test]]
+name = "differential"
+path = "diff/differential.rs"
 
 [features]
 concurrency-stress = []

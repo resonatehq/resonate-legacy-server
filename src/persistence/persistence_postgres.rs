@@ -1318,10 +1318,6 @@ impl Db for PostgresDb<'_> {
             deleted_ready_callbacks AS (
               DELETE FROM callbacks
               WHERE awaiter_id = $1 AND ready = true
-                -- TODO: remove `AND NOT EXISTS (SELECT 1 FROM can_suspend)` so stale ready
-                -- callbacks are cleared on both the suspend path and the immediate-resume path,
-                -- not just immediate-resume. Matches the SQLite behaviour.
-                AND NOT EXISTS (SELECT 1 FROM can_suspend)
                 AND EXISTS (SELECT 1 FROM locked_task WHERE version = $2 AND state = 'acquired')
                 AND (SELECT cnt FROM missing_count) = 0
               RETURNING *
@@ -1778,7 +1774,7 @@ impl Db for PostgresDb<'_> {
                 CASE WHEN s.already_timedout THEN 'rejected_timedout' ELSE 'pending' END,
                 s.promise_param_headers, s.promise_param_data, $4::jsonb,
                 s.computed_timeout_at,
-                CASE WHEN s.already_timedout THEN s.computed_timeout_at ELSE $5 END,
+                CASE WHEN s.already_timedout THEN s.computed_timeout_at ELSE $2 END,
                 CASE WHEN s.already_timedout THEN s.computed_timeout_at ELSE NULL END
               FROM schedule s
               ON CONFLICT (id) DO NOTHING
@@ -1802,7 +1798,7 @@ impl Db for PostgresDb<'_> {
             ),
             inserted_or_skipped_ttimeout AS (
               INSERT INTO task_timeouts (timeout_at, id, timeout_type, ttl)
-              SELECT ($5 + {trt}), t.id, 0, {trt}
+              SELECT ($2 + {trt}), t.id, 0, {trt}
               FROM inserted_or_skipped_task t
               WHERE t.state = 'pending'
               ON CONFLICT (id) DO NOTHING

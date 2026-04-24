@@ -1746,7 +1746,7 @@ impl Db for MysqlDb<'_> {
         let (state, settled_at, created_at): (&str, Option<i64>, i64) = if already_timedout {
             ("rejected_timedout", Some(computed_timeout_at), computed_timeout_at)
         } else {
-            ("pending", None, time)
+            ("pending", None, fired_at)
         };
 
         // 5. Create promise (idempotent)
@@ -1796,7 +1796,7 @@ impl Db for MysqlDb<'_> {
                         rt_block_on(
                             sqlx::query(
                                 "INSERT IGNORE INTO task_timeouts (timeout_at, id, timeout_type, ttl) VALUES (?, ?, 0, ?)"
-                            ).bind(time + trt).bind(&computed_promise_id).bind(trt)
+                            ).bind(fired_at + trt).bind(&computed_promise_id).bind(trt)
                              .execute(self.tx().as_mut())
                         )?;
                         rt_block_on(

@@ -929,12 +929,11 @@ impl<'a> Db for SqliteDb<'a> {
         let can_suspend = missing_count == 0 && !has_settled;
 
         if can_suspend {
-            // TODO: clear stale ready callbacks before inserting new ones, so a re-suspend
-            // after a prior resume doesn't leave stale ready state. Add before the loop:
-            //   self.conn.execute(
-            //       "DELETE FROM callbacks WHERE awaiter_id = ?1 AND ready = true",
-            //       params![task_id],
-            //   )?;
+            // Clear stale ready callbacks from a prior resume before registering new ones
+            self.conn.execute(
+                "DELETE FROM callbacks WHERE awaiter_id = ?1 AND ready = true",
+                params![task_id],
+            )?;
             // Register callbacks for all awaited
             for aid in awaited_ids {
                 self.conn.execute(
@@ -1151,17 +1150,11 @@ impl<'a> Db for SqliteDb<'a> {
         cursor: Option<&str>,
         limit: i64,
     ) -> StorageResult<Vec<TaskRecord>> {
-        // TODO: add resumes count to the query and read it from column 5 instead of hardcoding 0.
-        // Replace the SELECT with:
-        //   "SELECT t.id, t.state, t.version,
-        //           CASE WHEN tt.timeout_type = 1 THEN tt.ttl ELSE NULL END,
-        //           CASE WHEN tt.timeout_type = 1 THEN tt.process_id ELSE NULL END,
-        //           COALESCE((SELECT COUNT(*) FROM callbacks c WHERE c.awaiter_id = t.id AND c.ready = true), 0) AS resumes"
-        // And change `resumes: 0` to `resumes: row.get(5)?`.
         let mut stmt = self.conn.prepare(
             "SELECT t.id, t.state, t.version,
                     CASE WHEN tt.timeout_type = 1 THEN tt.ttl ELSE NULL END,
-                    CASE WHEN tt.timeout_type = 1 THEN tt.process_id ELSE NULL END
+                    CASE WHEN tt.timeout_type = 1 THEN tt.process_id ELSE NULL END,
+                    COALESCE((SELECT COUNT(*) FROM callbacks c WHERE c.awaiter_id = t.id AND c.ready = true), 0) AS resumes
              FROM tasks t LEFT JOIN task_timeouts tt ON tt.id = t.id
              WHERE (?1 IS NULL OR t.state = ?1) AND (?2 IS NULL OR t.id > ?2)
              ORDER BY t.id ASC LIMIT ?3",
@@ -1174,9 +1167,9 @@ impl<'a> Db for SqliteDb<'a> {
                 id: row.get(0)?,
                 state: parse_task_state(&state_str),
                 version: row.get(2)?,
-                resumes: 0,
                 ttl: row.get::<_, Option<i64>>(3).ok().flatten(),
                 pid: row.get::<_, Option<String>>(4).ok().flatten(),
+                resumes: row.get(5)?,
             });
         }
         Ok(results)
@@ -1321,7 +1314,7 @@ impl<'a> Db for SqliteDb<'a> {
         let (state, settled_at, created_at): (&str, Option<i64>, i64) = if already_timedout {
             ("rejected_timedout", Some(promise_timeout_at), promise_timeout_at)
         } else {
-            ("pending", None, time)
+            ("pending", None, fired_at)
         };
 
         // Step 5: Create promise
@@ -1363,7 +1356,7 @@ impl<'a> Db for SqliteDb<'a> {
                     if self.conn.changes() > 0 {
                         self.conn.execute(
                             "INSERT OR IGNORE INTO task_timeouts (timeout_at, id, timeout_type, ttl) VALUES (?1, ?2, 0, ?3)",
-                            params![time + self.task_retry_timeout, promise_id, self.task_retry_timeout],
+                            params![fired_at + self.task_retry_timeout, promise_id, self.task_retry_timeout],
                         )?;
                         self.conn.execute(
                             "INSERT INTO outgoing_execute (id, version, address) VALUES (?1, 0, ?2)
