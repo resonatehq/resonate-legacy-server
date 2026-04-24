@@ -43,6 +43,11 @@ pub struct CommonArgs {
     #[arg(long = "server-url", value_name = "URL")]
     pub url: Option<String>,
 
+    // --- CORS ---
+    /// Allowed CORS origins (repeatable; use "*" for permissive access)
+    #[arg(long = "server-cors-allow-origin", value_name = "ORIGIN")]
+    pub cors_allow_origins: Vec<String>,
+
     // --- Storage ---
     /// Storage backend: sqlite or postgres [default: sqlite]
     #[arg(long = "storage-type")]
@@ -158,6 +163,10 @@ impl CommonArgs {
                 "http://{}:{}",
                 config.server.host, config.server.port
             ));
+        }
+
+        if !self.cors_allow_origins.is_empty() {
+            config.server.cors.allow_origins = self.cors_allow_origins;
         }
 
         if let Some(v) = self.storage_type {
