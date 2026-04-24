@@ -1,3 +1,4 @@
+pub mod persistence_mysql;
 pub mod persistence_postgres;
 pub mod persistence_sqlite;
 
@@ -321,6 +322,7 @@ pub trait Db {
         schedule_id: &str,
         fired_at: i64,
         next_run_at: i64,
+        time: i64,
         promise_tags: &HashMap<String, String>,
     ) -> StorageResult<Option<ScheduleRecord>>;
 
@@ -348,6 +350,7 @@ pub trait Db {
 pub enum Storage {
     Sqlite(persistence_sqlite::SqliteStorage),
     Postgres(persistence_postgres::PostgresStorage),
+    Mysql(persistence_mysql::MysqlStorage),
 }
 
 impl Storage {
@@ -359,6 +362,7 @@ impl Storage {
         match self {
             Storage::Sqlite(s) => s.transact(f).await,
             Storage::Postgres(p) => p.transact(f, false).await,
+            Storage::Mysql(m) => m.transact(f).await,
         }
     }
 
@@ -370,6 +374,7 @@ impl Storage {
         match self {
             Storage::Sqlite(s) => s.query(f).await,
             Storage::Postgres(p) => p.query(f).await,
+            Storage::Mysql(m) => m.query(f).await,
         }
     }
 }

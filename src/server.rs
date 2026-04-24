@@ -403,7 +403,7 @@ impl Drop for PollGuard {
     }
 }
 
-async fn dispatch(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> ResponseEnvelope {
+pub async fn dispatch(state: &Arc<Server>, req: &RequestEnvelope, now: i64) -> ResponseEnvelope {
     let kind = req.kind.as_str();
 
     match kind {

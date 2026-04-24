@@ -56,6 +56,14 @@ pub struct CommonArgs {
     #[arg(long = "storage-postgres-pool-size", value_name = "N")]
     pub postgres_pool_size: Option<u32>,
 
+    /// MySQL connection URL
+    #[arg(long = "storage-mysql-url", value_name = "URL")]
+    pub mysql_url: Option<String>,
+
+    /// MySQL connection pool size [default: 10]
+    #[arg(long = "storage-mysql-pool-size", value_name = "N")]
+    pub mysql_pool_size: Option<u32>,
+
     // --- Auth ---
     /// Public key for JWT verification (enables auth; use "none" for unsigned mode)
     #[arg(long = "auth-publickey", value_name = "KEY")]
@@ -168,6 +176,16 @@ impl CommonArgs {
         }
         if let Some(v) = self.postgres_pool_size {
             config.storage.postgres.pool_size = v;
+        }
+
+        if let Some(url) = &self.mysql_url {
+            config.storage.mysql.url = Some(url.clone());
+            if config.storage.storage_type == "sqlite" {
+                config.storage.storage_type = "mysql".to_string();
+            }
+        }
+        if let Some(v) = self.mysql_pool_size {
+            config.storage.mysql.pool_size = v;
         }
 
         if let Some(key) = self.auth_publickey {

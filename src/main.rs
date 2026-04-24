@@ -1,6 +1,7 @@
 mod auth;
 mod cli;
 mod config;
+mod oracle;
 
 mod metrics;
 mod persistence;
@@ -15,7 +16,9 @@ use std::sync::Arc;
 use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use clap::{Parser, Subcommand};
 use config::Config;
-use persistence::{persistence_sqlite::SqliteStorage, Storage};
+use persistence::{
+    persistence_mysql::MysqlStorage, persistence_sqlite::SqliteStorage, Storage,
+};
 use server::Server;
 use transport::transport_http_poll::PollRegistry;
 use types::ResponseEnvelope;
@@ -131,6 +134,9 @@ async fn run_server(config: Config) -> Result<(), String> {
     if config.storage.storage_type == "postgres" && config.storage.postgres.url.is_none() {
         return Err("storage.type=postgres requires RESONATE_STORAGE__POSTGRES__URL".into());
     }
+    if config.storage.storage_type == "mysql" && config.storage.mysql.url.is_none() {
+        return Err("MySQL storage selected but no URL configured. Set --storage-mysql-url or RESONATE_STORAGE__MYSQL__URL".to_string());
+    }
 
     // Validate poll config (buffer_size=0 panics in tokio::mpsc::channel)
     if config.transports.http_poll.buffer_size == 0 {
@@ -188,6 +194,15 @@ async fn run_server(config: Config) -> Result<(), String> {
                 .map_err(|e| format!("Failed to initialize Postgres schema: {e}"))?;
             tracing::info!("PostgreSQL initialized");
             Storage::Postgres(pg)
+        }
+        "mysql" => {
+            let url = config.storage.mysql.url.as_deref().unwrap();
+            let pool_size = config.storage.mysql.pool_size;
+            let mysql = MysqlStorage::connect(url, pool_size, config.tasks.retry_timeout)
+                .await
+                .map_err(|e| format!("MySQL connection failed: {e}"))?;
+            mysql.init().await.map_err(|e| format!("MySQL init failed: {e}"))?;
+            Storage::Mysql(mysql)
         }
         _ => {
             let path = &config.storage.sqlite.path;
