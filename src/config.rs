@@ -60,6 +60,13 @@ fn default_level() -> String {
     "info".to_string()
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CorsConfig {
+    /// Allowed origins. Empty = CORS disabled. Use ["*"] for permissive access.
+    #[serde(default)]
+    pub allow_origins: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     /// HTTP server host
@@ -82,6 +89,10 @@ pub struct ServerConfig {
     /// Defaults to http://{host}:{port} if not set.
     #[serde(default)]
     pub url: Option<String>,
+
+    /// CORS configuration
+    #[serde(default)]
+    pub cors: CorsConfig,
 }
 
 fn default_host() -> String {
@@ -105,6 +116,7 @@ impl Default for ServerConfig {
             bind: default_bind(),
             shutdown_timeout: default_shutdown_timeout(),
             url: None,
+            cors: CorsConfig::default(),
         }
     }
 }

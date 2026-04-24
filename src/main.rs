@@ -12,7 +12,15 @@ mod util;
 
 use std::sync::Arc;
 
-use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+use axum::{
+    http::{
+        header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, ORIGIN},
+        HeaderValue, Method, StatusCode,
+    },
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
 use clap::{Parser, Subcommand};
 use config::Config;
 use persistence::{persistence_sqlite::SqliteStorage, Storage};
@@ -282,12 +290,21 @@ async fn run_server(config: Config) -> Result<(), String> {
     // Build HTTP router
     let effective_url = state.config.server.url.clone().unwrap_or_default();
     let (sse_shutdown_tx, sse_shutdown_rx) = tokio::sync::watch::channel(false);
+
+    let cors_layer = build_cors_layer(&state.config.server.cors.allow_origins);
+    if !state.config.server.cors.allow_origins.is_empty() {
+        tracing::info!(
+            origins = ?state.config.server.cors.allow_origins,
+            "CORS enabled"
+        );
+    }
+
     let app_state = server::AppState {
         server: state,
         poll_registry,
         sse_shutdown_rx,
     };
-    let app = server::api_routes()
+    let mut app = server::api_routes()
         .merge(server::poll_routes())
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(
             handle_panic,
@@ -305,6 +322,10 @@ async fn run_server(config: Config) -> Result<(), String> {
                 ),
         )
         .with_state(app_state);
+    if let Some(layer) = cors_layer {
+        app = app.layer(layer);
+    }
+    let app = app;
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind, port))
         .await
         .map_err(|e| format!("Failed to bind to {}:{}: {e}", bind, port))?;
@@ -335,6 +356,32 @@ async fn run_server(config: Config) -> Result<(), String> {
 
     tracing::info!("Resonate Server stopped");
     Ok(())
+}
+
+fn build_cors_layer(allow_origins: &[String]) -> Option<tower_http::cors::CorsLayer> {
+    if allow_origins.is_empty() {
+        return None;
+    }
+    let layer = if allow_origins.iter().any(|o| o == "*") {
+        tower_http::cors::CorsLayer::permissive()
+    } else {
+        let origins: Vec<HeaderValue> = allow_origins
+            .iter()
+            .filter_map(|o| o.parse().ok())
+            .collect();
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
+            .allow_headers([ORIGIN, CONTENT_LENGTH, CONTENT_TYPE, AUTHORIZATION])
+    };
+    Some(layer)
 }
 
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
