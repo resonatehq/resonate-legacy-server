@@ -84,6 +84,12 @@ pub struct Oracle {
     outgoing: Vec<(String, Value)>,
 }
 
+impl Default for Oracle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Oracle {
     pub fn new() -> Self {
         Self {
@@ -174,7 +180,7 @@ impl Oracle {
             Ok(r) => r,
             Err(e) => return e,
         };
-        self.try_timeout(&[r.id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&r.id), now);
         match self.promises.get(&r.id) {
             None => ResponseEnvelope::error(
                 req.kind.clone(),
@@ -207,7 +213,7 @@ impl Oracle {
                 );
             }
         }
-        self.try_timeout(&[r.id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&r.id), now);
         if let Some(p) = self.promises.get(&r.id) {
             return ResponseEnvelope::success(
                 req.kind.clone(),
@@ -220,7 +226,11 @@ impl Oracle {
         let addr = r.tags.get("resonate:target").cloned();
         let already_timedout = now >= r.timeout_at;
         let (state, created_at, settled_at) = if already_timedout {
-            (Self::timeout_state(&r.tags), r.timeout_at, Some(r.timeout_at))
+            (
+                Self::timeout_state(&r.tags),
+                r.timeout_at,
+                Some(r.timeout_at),
+            )
         } else {
             (PromiseState::Pending, now, None)
         };
@@ -279,7 +289,7 @@ impl Oracle {
             Ok(r) => r,
             Err(e) => return e,
         };
-        self.try_timeout(&[r.id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&r.id), now);
         let is_pending = match self.promises.get(&r.id) {
             None => {
                 return ResponseEnvelope::error(
@@ -421,7 +431,7 @@ impl Oracle {
                 "Invalid listener address",
             );
         }
-        self.try_timeout(&[r.awaited.clone()], now);
+        self.try_timeout(std::slice::from_ref(&r.awaited), now);
         let is_pending = match self.promises.get(&r.awaited) {
             None => {
                 return ResponseEnvelope::error(
@@ -528,7 +538,7 @@ impl Oracle {
             Ok(r) => r,
             Err(e) => return e,
         };
-        self.try_timeout(&[r.id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&r.id), now);
         let (state, version, resumes, ttl, pid) = match self.tasks.get(&r.id) {
             None => {
                 return ResponseEnvelope::error(
@@ -540,13 +550,7 @@ impl Oracle {
             }
             Some(t) => {
                 let eff = self.effective_task_state(now, &r.id).unwrap_or(t.state);
-                (
-                    eff,
-                    t.version,
-                    t.resumes.len() as i64,
-                    t.ttl,
-                    t.pid.clone(),
-                )
+                (eff, t.version, t.resumes.len() as i64, t.ttl, t.pid.clone())
             }
         };
         let task = TaskRecord {
@@ -554,8 +558,16 @@ impl Oracle {
             state,
             version,
             resumes,
-            ttl: if state == TaskState::Fulfilled { None } else { ttl },
-            pid: if state == TaskState::Fulfilled { None } else { pid },
+            ttl: if state == TaskState::Fulfilled {
+                None
+            } else {
+                ttl
+            },
+            pid: if state == TaskState::Fulfilled {
+                None
+            } else {
+                pid
+            },
         };
         ResponseEnvelope::success(
             req.kind.clone(),
@@ -581,11 +593,13 @@ impl Oracle {
             }
         }
         let promise_id = action.id.clone();
-        self.try_timeout(&[promise_id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&promise_id), now);
 
         // Task already exists
         if let Some(t) = self.tasks.get(&promise_id) {
-            let eff = self.effective_task_state(now, &promise_id).unwrap_or(t.state);
+            let eff = self
+                .effective_task_state(now, &promise_id)
+                .unwrap_or(t.state);
             match eff {
                 TaskState::Pending => {
                     let new_version = t.version + 1;
@@ -598,7 +612,8 @@ impl Oracle {
                     }
                     self.del_t_timeout(&promise_id);
                     self.set_t_timeout(&promise_id, TTimeoutKind::Lease, now + r.ttl);
-                    let task = Self::to_task_record(&promise_id, self.tasks.get(&promise_id).unwrap());
+                    let task =
+                        Self::to_task_record(&promise_id, self.tasks.get(&promise_id).unwrap());
                     let promise = Self::to_promise_record(
                         now,
                         &promise_id,
@@ -608,11 +623,16 @@ impl Oracle {
                     return ResponseEnvelope::success(
                         req.kind.clone(),
                         req.head.corr_id.clone(),
-                        &TaskCreateResponseData { task, promise, preload },
+                        &TaskCreateResponseData {
+                            task,
+                            promise,
+                            preload,
+                        },
                     );
                 }
                 TaskState::Fulfilled => {
-                    let task = Self::to_task_record(&promise_id, self.tasks.get(&promise_id).unwrap());
+                    let task =
+                        Self::to_task_record(&promise_id, self.tasks.get(&promise_id).unwrap());
                     let promise = Self::to_promise_record(
                         now,
                         &promise_id,
@@ -622,7 +642,11 @@ impl Oracle {
                     return ResponseEnvelope::success(
                         req.kind.clone(),
                         req.head.corr_id.clone(),
-                        &TaskCreateResponseData { task, promise, preload },
+                        &TaskCreateResponseData {
+                            task,
+                            promise,
+                            preload,
+                        },
                     );
                 }
                 _ => {
@@ -647,7 +671,7 @@ impl Oracle {
         }
 
         // Create new promise + task
-        let addr = action.tags.get("resonate:target").cloned();
+        let _addr = action.tags.get("resonate:target").cloned();
         let already_timedout = now >= action.timeout_at;
         let (p_state, created_at, settled_at) = if already_timedout {
             (
@@ -675,12 +699,7 @@ impl Oracle {
         let (task_state, task_version, task_ttl, task_pid) = if already_timedout {
             (TaskState::Fulfilled, 0i64, None, None)
         } else {
-            (
-                TaskState::Acquired,
-                1i64,
-                Some(r.ttl),
-                Some(r.pid.clone()),
-            )
+            (TaskState::Acquired, 1i64, Some(r.ttl), Some(r.pid.clone()))
         };
         self.tasks.insert(
             promise_id.clone(),
@@ -717,7 +736,7 @@ impl Oracle {
             Ok(r) => r,
             Err(e) => return e,
         };
-        self.try_timeout(&[r.id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&r.id), now);
         let (task_state, task_version) = match self.tasks.get(&r.id) {
             None => {
                 return ResponseEnvelope::error(
@@ -799,7 +818,7 @@ impl Oracle {
             Ok(r) => r,
             Err(e) => return e,
         };
-        self.try_timeout(&[r.id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&r.id), now);
         let (task_state, task_version) = match self.tasks.get(&r.id) {
             None => {
                 return ResponseEnvelope::error(
@@ -843,7 +862,7 @@ impl Oracle {
             Err(e) => return e,
         };
         let action = &r.action.data;
-        self.try_timeout(&[action.id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&action.id), now);
         let (task_state, task_version) = match self.tasks.get(&r.id) {
             None => {
                 return ResponseEnvelope::error(
@@ -1068,7 +1087,7 @@ impl Oracle {
                         );
                     }
                 }
-                self.try_timeout(&[create_data.id.clone()], now);
+                self.try_timeout(std::slice::from_ref(&create_data.id), now);
                 let inner_record = if let Some(p) = self.promises.get(&create_data.id) {
                     Some(Self::to_promise_record(now, &create_data.id, p))
                 } else {
@@ -1253,7 +1272,7 @@ impl Oracle {
             Ok(r) => r,
             Err(e) => return e,
         };
-        self.try_timeout(&[r.id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&r.id), now);
         let task_state = match self.tasks.get(&r.id) {
             None => {
                 return ResponseEnvelope::error(
@@ -1295,7 +1314,7 @@ impl Oracle {
             Ok(r) => r,
             Err(e) => return e,
         };
-        self.try_timeout(&[r.id.clone()], now);
+        self.try_timeout(std::slice::from_ref(&r.id), now);
         let task_state = match self.tasks.get(&r.id) {
             None => {
                 return ResponseEnvelope::error(
@@ -1542,9 +1561,8 @@ impl Oracle {
                 r.tags
                     .as_ref()
                     .map(|ft| {
-                        ft.iter().all(|(k, v)| {
-                            s.promise_tags.get(k).map(|sv| sv == v).unwrap_or(false)
-                        })
+                        ft.iter()
+                            .all(|(k, v)| s.promise_tags.get(k).map(|sv| sv == v).unwrap_or(false))
                     })
                     .unwrap_or(true)
             })
@@ -2000,8 +2018,7 @@ impl Oracle {
             .get(promise_id)
             .map(|p| Self::to_promise_record(now, promise_id, p));
         if let Some(record) = record {
-            let message =
-                json!({ "kind": "unblock", "head": {}, "data": { "promise": record } });
+            let message = json!({ "kind": "unblock", "head": {}, "data": { "promise": record } });
             for addr in listeners {
                 self.outgoing.push((addr, message.clone()));
             }
@@ -2090,11 +2107,12 @@ impl Oracle {
     }
 
     fn to_promise_record(now: i64, id: &str, p: &Promise) -> PromiseRecord {
-        let (state, settled_at) = if p.state == PromiseState::Pending && now > 0 && now >= p.timeout_at {
-            (Self::timeout_state(&p.tags), Some(p.timeout_at))
-        } else {
-            (p.state, p.settled_at)
-        };
+        let (state, settled_at) =
+            if p.state == PromiseState::Pending && now > 0 && now >= p.timeout_at {
+                (Self::timeout_state(&p.tags), Some(p.timeout_at))
+            } else {
+                (p.state, p.settled_at)
+            };
         PromiseRecord {
             id: id.to_string(),
             state,
@@ -2224,7 +2242,9 @@ impl Oracle {
     }
 
     pub fn has_pending_promises(&self) -> bool {
-        self.promises.values().any(|p| p.state == PromiseState::Pending)
+        self.promises
+            .values()
+            .any(|p| p.state == PromiseState::Pending)
     }
 
     pub fn has_schedules(&self) -> bool {

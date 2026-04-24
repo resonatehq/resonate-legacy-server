@@ -1312,7 +1312,11 @@ impl<'a> Db for SqliteDb<'a> {
         let promise_timeout_at = fired_at + schedule.promise_timeout;
         let already_timedout = time >= promise_timeout_at;
         let (state, settled_at, created_at): (&str, Option<i64>, i64) = if already_timedout {
-            ("rejected_timedout", Some(promise_timeout_at), promise_timeout_at)
+            (
+                "rejected_timedout",
+                Some(promise_timeout_at),
+                promise_timeout_at,
+            )
         } else {
             ("pending", None, fired_at)
         };

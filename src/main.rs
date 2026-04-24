@@ -1,8 +1,6 @@
 mod auth;
 mod cli;
 mod config;
-mod oracle;
-
 mod metrics;
 mod persistence;
 mod processing;
@@ -16,9 +14,7 @@ use std::sync::Arc;
 use axum::{http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use clap::{Parser, Subcommand};
 use config::Config;
-use persistence::{
-    persistence_mysql::MysqlStorage, persistence_sqlite::SqliteStorage, Storage,
-};
+use persistence::{persistence_mysql::MysqlStorage, persistence_sqlite::SqliteStorage, Storage};
 use server::Server;
 use transport::transport_http_poll::PollRegistry;
 use types::ResponseEnvelope;
@@ -201,7 +197,10 @@ async fn run_server(config: Config) -> Result<(), String> {
             let mysql = MysqlStorage::connect(url, pool_size, config.tasks.retry_timeout)
                 .await
                 .map_err(|e| format!("MySQL connection failed: {e}"))?;
-            mysql.init().await.map_err(|e| format!("MySQL init failed: {e}"))?;
+            mysql
+                .init()
+                .await
+                .map_err(|e| format!("MySQL init failed: {e}"))?;
             Storage::Mysql(mysql)
         }
         _ => {

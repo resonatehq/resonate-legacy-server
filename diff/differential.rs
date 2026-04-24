@@ -37,10 +37,8 @@ use resonate::{
     config::Config,
     oracle::Oracle,
     persistence::{
-        persistence_mysql::MysqlStorage,
-        persistence_postgres::PostgresStorage,
-        persistence_sqlite::SqliteStorage,
-        Storage,
+        persistence_mysql::MysqlStorage, persistence_postgres::PostgresStorage,
+        persistence_sqlite::SqliteStorage, Storage,
     },
     server::{dispatch, Server},
     types::{RequestEnvelope, RequestHead, ResponseEnvelope, SUPPORTED_VERSIONS},
@@ -241,7 +239,14 @@ async fn differential_random() {
             let pre_snaps = snap_all(&backends, now).await;
             assert_no_divergence(
                 &pre_snaps,
-                &["promises", "messages", "tasks", "callbacks", "taskTimeouts", "promiseTimeouts"],
+                &[
+                    "promises",
+                    "messages",
+                    "tasks",
+                    "callbacks",
+                    "taskTimeouts",
+                    "promiseTimeouts",
+                ],
                 &format!("BEFORE {ctx}"),
             );
 
@@ -333,23 +338,33 @@ fn print_timing_summary(
     let header = format!(
         "  {:<op_w$}  {}",
         "operation",
-        backend_names.iter().map(|n| format!("{:>cell_w$}", n)).collect::<Vec<_>>().join("  ")
+        backend_names
+            .iter()
+            .map(|n| format!("{:>cell_w$}", n))
+            .collect::<Vec<_>>()
+            .join("  ")
     );
     eprintln!("[diff] {header}");
-    eprintln!("[diff]   {}", "─".repeat(op_w + 2 + backend_names.len() * (cell_w + 2)));
+    eprintln!(
+        "[diff]   {}",
+        "─".repeat(op_w + 2 + backend_names.len() * (cell_w + 2))
+    );
 
     for op in ALL_OPS {
-        let cells: Vec<String> = backend_names.iter().map(|name| {
-            let key = (name.to_string(), op.to_string());
-            if let Some(samples) = timings.get_mut(&key) {
-                samples.sort_unstable();
-                let mean_us = samples.iter().sum::<u64>() / samples.len() as u64 / 1000;
-                let p99_us = percentile(samples, 99.0) / 1000;
-                format!("{:>cell_w$}", format!("{mean_us}/{p99_us}µs"))
-            } else {
-                format!("{:>cell_w$}", "—")
-            }
-        }).collect();
+        let cells: Vec<String> = backend_names
+            .iter()
+            .map(|name| {
+                let key = (name.to_string(), op.to_string());
+                if let Some(samples) = timings.get_mut(&key) {
+                    samples.sort_unstable();
+                    let mean_us = samples.iter().sum::<u64>() / samples.len() as u64 / 1000;
+                    let p99_us = percentile(samples, 99.0) / 1000;
+                    format!("{:>cell_w$}", format!("{mean_us}/{p99_us}µs"))
+                } else {
+                    format!("{:>cell_w$}", "—")
+                }
+            })
+            .collect();
         eprintln!("[diff]   {:<op_w$}  {}", op, cells.join("  "));
     }
     eprintln!();
@@ -371,11 +386,7 @@ async fn setup_all(backends: &[(String, Backend)], now: i64) {
     for envelope in &[req("debug.start", json!({})), req("debug.reset", json!({}))] {
         for (name, b) in backends {
             let resp = b.dispatch(envelope, now).await;
-            assert_eq!(
-                resp.head.status, 200,
-                "{} failed on {name}",
-                envelope.kind
-            );
+            assert_eq!(resp.head.status, 200, "{} failed on {name}", envelope.kind);
         }
     }
 }
@@ -400,7 +411,10 @@ async fn send_all(
         let t0 = Instant::now();
         let resp = b.dispatch(envelope, now).await;
         let ns = t0.elapsed().as_nanos() as u64;
-        timings.entry((name.clone(), kind.clone())).or_default().push(ns);
+        timings
+            .entry((name.clone(), kind.clone()))
+            .or_default()
+            .push(ns);
         out.push((name.clone(), resp.head.status, resp.data));
     }
     out
@@ -423,14 +437,22 @@ fn assert_resps_agree(results: &[(String, i32, Value)], ctx: &str) {
     let all_statuses: Vec<(&str, i32)> = results.iter().map(|(n, s, _)| (n.as_str(), *s)).collect();
     let statuses_agree = all_statuses.windows(2).all(|w| w[0].1 == w[1].1);
     if !statuses_agree {
-        let detail: String = all_statuses.iter().map(|(n, s)| format!("  {n}={s}")).collect::<Vec<_>>().join("\n");
+        let detail: String = all_statuses
+            .iter()
+            .map(|(n, s)| format!("  {n}={s}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         panic!("{ctx}: status mismatch\n{detail}");
     }
 
     let all_data: Vec<(&str, &Value)> = results.iter().map(|(n, _, d)| (n.as_str(), d)).collect();
     let data_agree = all_data.windows(2).all(|w| w[0].1 == w[1].1);
     if !data_agree {
-        let detail: String = all_data.iter().map(|(n, d)| format!("  {n}:\n{d:#}")).collect::<Vec<_>>().join("\n");
+        let detail: String = all_data
+            .iter()
+            .map(|(n, d)| format!("  {n}:\n{d:#}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         panic!("{ctx}: data mismatch\n{detail}");
     }
 }
@@ -439,7 +461,11 @@ fn assert_snaps_agree(snaps: &[(String, Value)], ctx: &str) {
     let all: Vec<(&str, &Value)> = snaps.iter().map(|(n, v)| (n.as_str(), v)).collect();
     let agree = all.windows(2).all(|w| w[0].1 == w[1].1);
     if !agree {
-        let detail: String = all.iter().map(|(n, v)| format!("  {n}:\n{v:#}")).collect::<Vec<_>>().join("\n");
+        let detail: String = all
+            .iter()
+            .map(|(n, v)| format!("  {n}:\n{v:#}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         panic!("{ctx}: snapshot mismatch\n{detail}");
     }
 }
@@ -452,7 +478,11 @@ fn assert_no_divergence(snaps: &[(String, Value)], keys: &[&str], ctx: &str) {
             .collect();
         let agree = vals.windows(2).all(|w| w[0].1 == w[1].1);
         if !agree {
-            let detail: String = vals.iter().map(|(n, v)| format!("  {n}:\n{v:#}")).collect::<Vec<_>>().join("\n");
+            let detail: String = vals
+                .iter()
+                .map(|(n, v)| format!("  {n}:\n{v:#}"))
+                .collect::<Vec<_>>()
+                .join("\n");
             panic!("{ctx}: `{key}` diverged\n{detail}");
         }
     }
@@ -477,7 +507,10 @@ fn sort_messages(arr: &mut Vec<Value>) {
 }
 
 fn msg_sort_key(msg: &Value) -> String {
-    let kind = msg.pointer("/message/kind").and_then(|v| v.as_str()).unwrap_or("");
+    let kind = msg
+        .pointer("/message/kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     match kind {
         "execute" => {
             let id = msg
@@ -523,8 +556,11 @@ fn sort_by_id(arr: &mut Vec<Value>) {
 
 fn state_class(snap: &Value) -> u8 {
     let mut c = 0u8;
-    let non_empty =
-        |key: &str| snap.get(key).and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty());
+    let non_empty = |key: &str| {
+        snap.get(key)
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| !a.is_empty())
+    };
     if non_empty("promises") {
         c |= 1 << 0;
     }
@@ -584,12 +620,12 @@ enum Op {
 fn pick_op(rng: &mut fastrand::Rng, oracle: &Oracle, covered: &HashMap<String, usize>) -> Op {
     let uncovered = |kind: &str| !covered.contains_key(kind);
 
-    let has_acquired   = oracle.has_tasks_in_state(TaskState::Acquired);
-    let has_pending_t  = oracle.has_tasks_in_state(TaskState::Pending);
-    let has_suspended  = oracle.has_tasks_in_state(TaskState::Suspended);
-    let has_halted     = oracle.has_tasks_in_state(TaskState::Halted);
-    let has_pending_p  = oracle.has_pending_promises();
-    let has_schedules  = oracle.has_schedules();
+    let has_acquired = oracle.has_tasks_in_state(TaskState::Acquired);
+    let has_pending_t = oracle.has_tasks_in_state(TaskState::Pending);
+    let has_suspended = oracle.has_tasks_in_state(TaskState::Suspended);
+    let has_halted = oracle.has_tasks_in_state(TaskState::Halted);
+    let has_pending_p = oracle.has_pending_promises();
+    let has_schedules = oracle.has_schedules();
 
     if uncovered("task.suspend") && has_acquired && has_pending_p {
         return Op::TaskSuspend;
@@ -609,10 +645,7 @@ fn pick_op(rng: &mut fastrand::Rng, oracle: &Oracle, covered: &HashMap<String, u
     if uncovered("task.acquire") && has_pending_t {
         return Op::TaskAcquire;
     }
-    if uncovered("promise.register_callback")
-        && has_pending_p
-        && (has_acquired || has_pending_t)
-    {
+    if uncovered("promise.register_callback") && has_pending_p && (has_acquired || has_pending_t) {
         return Op::PromiseRegisterCallback;
     }
     if uncovered("promise.register_listener") && has_pending_p {
@@ -651,7 +684,12 @@ fn pick_op(rng: &mut fastrand::Rng, oracle: &Oracle, covered: &HashMap<String, u
     }
 }
 
-fn build_envelope(op: Op, rng: &mut fastrand::Rng, oracle: &Oracle, now: i64) -> (RequestEnvelope, i64) {
+fn build_envelope(
+    op: Op,
+    rng: &mut fastrand::Rng,
+    oracle: &Oracle,
+    now: i64,
+) -> (RequestEnvelope, i64) {
     match op {
         Op::PromiseCreate => (gen_promise_create(rng, oracle, now), now),
         Op::PromiseGet => (gen_promise_get(rng, oracle), now),
@@ -879,7 +917,11 @@ fn gen_task_heartbeat(rng: &mut fastrand::Rng, oracle: &Oracle) -> RequestEnvelo
         .into_iter()
         .take(3)
         .map(|(id, version)| {
-            let v = if rng.u32(0..4) == 0 { version - 1 } else { version };
+            let v = if rng.u32(0..4) == 0 {
+                version - 1
+            } else {
+                version
+            };
             json!({ "id": id, "version": v })
         })
         .collect();
@@ -959,16 +1001,32 @@ fn gen_debug_tick(rng: &mut fastrand::Rng, now: i64) -> (RequestEnvelope, i64) {
     (req("debug.tick", json!({ "time": new_now })), new_now)
 }
 
-fn promise_id(n: u32) -> String { format!("p{n}") }
-fn task_id(n: u32) -> String    { format!("t{n}") }
-fn schedule_id(n: u32) -> String { format!("s{n}") }
+fn promise_id(n: u32) -> String {
+    format!("p{n}")
+}
+fn task_id(n: u32) -> String {
+    format!("t{n}")
+}
+fn schedule_id(n: u32) -> String {
+    format!("s{n}")
+}
 
-fn random_promise_id(rng: &mut fastrand::Rng) -> String  { promise_id(rng.u32(0..8)) }
-fn random_task_id(rng: &mut fastrand::Rng) -> String     { task_id(rng.u32(0..8)) }
-fn random_schedule_id(rng: &mut fastrand::Rng) -> String { schedule_id(rng.u32(0..4)) }
+fn random_promise_id(rng: &mut fastrand::Rng) -> String {
+    promise_id(rng.u32(0..8))
+}
+fn random_task_id(rng: &mut fastrand::Rng) -> String {
+    task_id(rng.u32(0..8))
+}
+fn random_schedule_id(rng: &mut fastrand::Rng) -> String {
+    schedule_id(rng.u32(0..4))
+}
 
 fn promise_id_different_from(rng: &mut fastrand::Rng, other: &str) -> String {
     let n = rng.u32(0..8);
     let candidate = promise_id(n);
-    if candidate == other { promise_id((n + 1) % 8) } else { candidate }
+    if candidate == other {
+        promise_id((n + 1) % 8)
+    } else {
+        candidate
+    }
 }
