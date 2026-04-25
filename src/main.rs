@@ -226,6 +226,7 @@ async fn run_server(config: Config) -> Result<(), String> {
     let poll_max_connections = config.transports.http_poll.max_connections;
     let poll_buffer_size = config.transports.http_poll.buffer_size;
     let shutdown_timeout = std::time::Duration::from_millis(config.server.shutdown_timeout);
+    let is_sqlite = config.storage.storage_type == "sqlite";
     let state = Arc::new(Server::new(config, auth_config, storage));
 
     // Build transports
@@ -321,7 +322,22 @@ async fn run_server(config: Config) -> Result<(), String> {
     let mut app = server::api_routes()
         .merge(server::poll_routes())
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(
-            handle_panic,
+            move |err: Box<dyn std::any::Any + Send + 'static>| {
+                let message = if let Some(s) = err.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = err.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "internal server error".to_string()
+                };
+                tracing::error!(message = %message, "panic in request handler");
+                if is_sqlite {
+                    std::process::abort();
+                }
+                let body =
+                    ResponseEnvelope::error("unknown".to_string(), "0".to_string(), 500, &message);
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
+            },
         ))
         .layer(
             tower_http::trace::TraceLayer::new_for_http()
@@ -396,19 +412,6 @@ fn build_cors_layer(allow_origins: &[String]) -> Option<tower_http::cors::CorsLa
             .allow_headers([ORIGIN, CONTENT_LENGTH, CONTENT_TYPE, AUTHORIZATION])
     };
     Some(layer)
-}
-
-fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
-    let message = if let Some(s) = err.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = err.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "internal server error".to_string()
-    };
-    tracing::error!(message = %message, "panic in request handler");
-    let body = ResponseEnvelope::error("unknown".to_string(), "0".to_string(), 500, &message);
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
 }
 
 /// Wait for SIGINT or SIGTERM to initiate graceful shutdown.

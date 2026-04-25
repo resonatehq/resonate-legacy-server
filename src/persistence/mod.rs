@@ -16,6 +16,9 @@ pub enum StorageError {
     /// Serialization conflict — retries exhausted, nothing was committed.
     /// The caller should return 503 (not 500) to indicate a retriable no-op.
     Serialization,
+    /// The request contains a field that violates a storage-level constraint
+    /// (e.g. a VARCHAR(255) column in MySQL). The caller should return 400.
+    InvalidInput(String),
 }
 
 impl std::fmt::Display for StorageError {
@@ -23,6 +26,7 @@ impl std::fmt::Display for StorageError {
         match self {
             StorageError::Backend(msg) => write!(f, "Storage error: {}", msg),
             StorageError::Serialization => write!(f, "Serialization conflict"),
+            StorageError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
         }
     }
 }

@@ -769,6 +769,11 @@ impl Db for MysqlDb<'_> {
             already_timedout,
             address,
         } = *params;
+        if id.len() > 255 {
+            return Err(StorageError::InvalidInput(
+                "id exceeds maximum length of 255 characters".to_string(),
+            ));
+        }
         let trt = self.task_retry_timeout;
 
         let res = rt_block_on(
@@ -1086,6 +1091,11 @@ impl Db for MysqlDb<'_> {
             ttl,
             pid,
         } = *params;
+        if promise_id.len() > 255 {
+            return Err(StorageError::InvalidInput(
+                "id exceeds maximum length of 255 characters".to_string(),
+            ));
+        }
         let trt = self.task_retry_timeout;
         let task_initial_state = if already_timedout {
             "fulfilled"

@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        STORAGE: [sqlite, postgres]
+        STORAGE: [sqlite, postgres, mysql]
 
     steps:
       - name: Checkout resonate-server-rs
