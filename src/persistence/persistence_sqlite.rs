@@ -1311,8 +1311,14 @@ impl<'a> Db for SqliteDb<'a> {
             .replace("{{.timestamp}}", &fired_at.to_string());
         let promise_timeout_at = fired_at + schedule.promise_timeout;
         let already_timedout = time >= promise_timeout_at;
+        let is_timer = promise_tags.get("resonate:timer").map(|v| v.as_str()) == Some("true");
         let (state, settled_at, created_at): (&str, Option<i64>, i64) = if already_timedout {
-            ("rejected_timedout", Some(promise_timeout_at), fired_at)
+            let s = if is_timer {
+                "resolved"
+            } else {
+                "rejected_timedout"
+            };
+            (s, Some(promise_timeout_at), fired_at)
         } else {
             ("pending", None, fired_at)
         };

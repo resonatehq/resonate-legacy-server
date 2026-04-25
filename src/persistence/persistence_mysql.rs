@@ -1979,8 +1979,14 @@ impl Db for MysqlDb<'_> {
         let address = promise_tags.get("resonate:target").cloned();
 
         let already_timedout = time >= computed_timeout_at;
+        let is_timer = promise_tags.get("resonate:timer").map(|v| v.as_str()) == Some("true");
         let (state, settled_at, created_at): (&str, Option<i64>, i64) = if already_timedout {
-            ("rejected_timedout", Some(computed_timeout_at), fired_at)
+            let s = if is_timer {
+                "resolved"
+            } else {
+                "rejected_timedout"
+            };
+            (s, Some(computed_timeout_at), fired_at)
         } else {
             ("pending", None, fired_at)
         };

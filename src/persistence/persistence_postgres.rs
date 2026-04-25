@@ -1771,7 +1771,7 @@ impl Db for PostgresDb<'_> {
             inserted_or_skipped_promise AS (
               INSERT INTO promises (id, state, param_headers, param_data, tags, timeout_at, created_at, settled_at)
               SELECT s.computed_promise_id,
-                CASE WHEN s.already_timedout THEN 'rejected_timedout' ELSE 'pending' END,
+                CASE WHEN s.already_timedout THEN CASE WHEN ($4::jsonb->>'resonate:timer') = 'true' THEN 'resolved' ELSE 'rejected_timedout' END ELSE 'pending' END,
                 s.promise_param_headers, s.promise_param_data, $4::jsonb,
                 s.computed_timeout_at,
                 $2,
@@ -1790,7 +1790,7 @@ impl Db for PostgresDb<'_> {
             inserted_or_skipped_task AS (
               INSERT INTO tasks (id, state)
               SELECT p.id,
-                CASE WHEN p.state = 'rejected_timedout' THEN 'fulfilled' ELSE 'pending' END
+                CASE WHEN p.state != 'pending' THEN 'fulfilled' ELSE 'pending' END
               FROM inserted_or_skipped_promise p
               WHERE EXISTS (SELECT 1 FROM schedule s WHERE s.address IS NOT NULL)
               ON CONFLICT (id) DO NOTHING
