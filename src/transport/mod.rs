@@ -1,7 +1,9 @@
+pub mod transport_exec_bash;
 pub mod transport_gcps;
 pub mod transport_http_poll;
 pub mod transport_http_push;
 
+use transport_exec_bash::BashExecTransport;
 use transport_gcps::GcpsPubSubTransport;
 use transport_http_poll::PollRegistry;
 use transport_http_push::HttpPushTransport;
@@ -9,11 +11,12 @@ use transport_http_push::HttpPushTransport;
 use std::sync::Arc;
 
 /// Dispatches messages to the appropriate transport by parsing the address once.
-/// Routes by URL scheme: http/https → push, poll → SSE, gcps → GCP Pub/Sub.
+/// Routes by URL scheme: http/https → push, poll → SSE, gcps → GCP Pub/Sub, bash → bash exec.
 pub struct TransportDispatcher {
     http: Arc<HttpPushTransport>,
     poll: Arc<PollRegistry>,
     gcps: Option<Arc<GcpsPubSubTransport>>,
+    bash: Option<Arc<BashExecTransport>>,
 }
 
 impl TransportDispatcher {
@@ -21,8 +24,9 @@ impl TransportDispatcher {
         http: Arc<HttpPushTransport>,
         poll: Arc<PollRegistry>,
         gcps: Option<Arc<GcpsPubSubTransport>>,
+        bash: Option<Arc<BashExecTransport>>,
     ) -> Self {
-        Self { http, poll, gcps }
+        Self { http, poll, gcps, bash }
     }
 
     /// Parse the address, route to the correct transport, deliver.
@@ -50,6 +54,15 @@ impl TransportDispatcher {
                     tracing::warn!(address = %address, "GCP Pub/Sub transport not configured, message dropped")
                 }
             },
+            Some(Address::Bash(_)) => match &self.bash {
+                Some(bash) => {
+                    tracing::debug!(transport = "bash", address, kind, "Dispatching message via bash exec");
+                    bash.send(address, payload).await;
+                }
+                None => {
+                    tracing::warn!(address = %address, "Bash exec transport not configured, message dropped")
+                }
+            },
             None => {
                 tracing::warn!(address = %address, "Invalid address, message cannot be routed");
             }
@@ -66,6 +79,9 @@ pub enum Address {
     Poll(PollAddress),
     /// Google Cloud Pub/Sub delivery
     Gcps(GcpsAddress),
+    /// Bash script execution (script is in param.data)
+    #[allow(dead_code)]
+    Bash(BashAddress),
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +107,10 @@ pub struct GcpsAddress {
     pub project: String,
     pub topic: String,
 }
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct BashAddress;
 
 /// Returns true if the address is a valid, routable URL.
 pub fn is_valid_address(address: &str) -> bool {
@@ -137,6 +157,17 @@ pub fn parse_address(address: &str) -> Option<Address> {
             }
             Some(Address::Gcps(GcpsAddress { project, topic }))
         }
+        "bash" => Some(Address::Bash(BashAddress)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bash_address_parses() {
+        assert!(matches!(parse_address("bash://"), Some(Address::Bash(_))));
+        assert!(matches!(parse_address("bash://inline"), Some(Address::Bash(_))));
     }
 }
