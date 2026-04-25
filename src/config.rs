@@ -123,11 +123,11 @@ impl Default for ServerConfig {
 
 /// Storage backend configuration.
 ///
-/// The `type` field selects the active backend ("sqlite" or "postgres").
-/// Backend-specific settings are in the `sqlite` and `postgres` sub-structs.
+/// The `type` field selects the active backend ("sqlite", "postgres", or "mysql").
+/// Backend-specific settings are in the `sqlite`, `postgres`, and `mysql` sub-structs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
-    /// Active backend: "sqlite" or "postgres"
+    /// Active backend: "sqlite", "postgres", or "mysql"
     #[serde(default = "default_storage_type", rename = "type")]
     pub storage_type: String,
 
@@ -138,6 +138,10 @@ pub struct StorageConfig {
     /// PostgreSQL-specific configuration
     #[serde(default)]
     pub postgres: PostgresConfig,
+
+    /// MySQL-specific configuration
+    #[serde(default)]
+    pub mysql: MysqlConfig,
 }
 
 fn default_storage_type() -> String {
@@ -187,12 +191,30 @@ impl Default for PostgresConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MysqlConfig {
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default = "default_pool_size")]
+    pub pool_size: u32,
+}
+
+impl Default for MysqlConfig {
+    fn default() -> Self {
+        Self {
+            url: None,
+            pool_size: default_pool_size(),
+        }
+    }
+}
+
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             storage_type: default_storage_type(),
             sqlite: SqliteConfig::default(),
             postgres: PostgresConfig::default(),
+            mysql: MysqlConfig::default(),
         }
     }
 }
@@ -445,10 +467,10 @@ impl Config {
 
         // Validate storage type
         match config.storage.storage_type.as_str() {
-            "sqlite" | "postgres" => {}
+            "sqlite" | "postgres" | "mysql" => {}
             other => {
                 return Err(format!(
-                    "Unknown storage backend: '{}'. Valid options are 'sqlite' and 'postgres'.",
+                    "Unknown storage backend: '{}'. Valid options are 'sqlite', 'postgres', and 'mysql'.",
                     other
                 ));
             }
