@@ -627,8 +627,8 @@ fn row_to_task(row: &MySqlRow) -> TaskRecord {
     TaskRecord {
         id: row.get("id"),
         state: parse_task_state(&row.get::<String, _>("state")),
-        version: row.get::<i32, _>("version") as i64,
-        resumes: resumes as i64,
+        version: row.get("version"),
+        resumes,
         ttl: row.get("ttl"),
         pid: row.get("pid"),
     }
@@ -1063,11 +1063,11 @@ impl Db for MysqlDb<'_> {
         )?;
         match row {
             Some(r) => {
-                let resumes: i64 = r.get("resumes");
+                let resumes: i32 = r.get("resumes");
                 Ok(Some(TaskRecord {
                     id: r.get("id"),
                     state: parse_task_state(&r.get::<String, _>("state")),
-                    version: r.get::<i32, _>("version") as i64,
+                    version: r.get("version"),
                     resumes,
                     ttl: r.get("ttl"),
                     pid: r.get("pid"),
@@ -1171,7 +1171,7 @@ impl Db for MysqlDb<'_> {
                 promise,
                 task_created: true,
                 task_state: Some(task_initial_state.to_string()),
-                task_version: Some(task_initial_version as i64),
+                task_version: Some(task_initial_version),
             });
         }
 
@@ -1184,7 +1184,7 @@ impl Db for MysqlDb<'_> {
             promise,
             task_created: false,
             task_state: task_row.as_ref().map(|r| r.get::<String, _>("state")),
-            task_version: task_row.as_ref().map(|r| r.get::<i32, _>("version") as i64),
+            task_version: task_row.as_ref().map(|r| r.get("version")),
         })
     }
 
@@ -1203,7 +1203,7 @@ impl Db for MysqlDb<'_> {
                  WHERE id = ? AND version = ? AND state = 'pending'",
             )
             .bind(task_id)
-            .bind(version as i32)
+            .bind(version)
             .execute(self.tx().as_mut()),
         )?;
         let was_acquired = res.rows_affected() > 0;
@@ -1244,7 +1244,7 @@ impl Db for MysqlDb<'_> {
         let task_state = task_row
             .as_ref()
             .map(|r| parse_task_state(&r.get::<String, _>("state")));
-        let task_version = task_row.as_ref().map(|r| r.get::<i32, _>("version") as i64);
+        let task_version = task_row.as_ref().map(|r| r.get("version"));
 
         Ok(TaskAcquireResult {
             promise: promise.as_ref().map(row_to_promise),
@@ -1281,7 +1281,7 @@ impl Db for MysqlDb<'_> {
         let fence_ok = task_row.as_ref().is_some_and(|r| {
             let s: String = r.get("state");
             let v: i32 = r.get("version");
-            s == "acquired" && v == version as i32
+            s == "acquired" && v == version
         });
 
         let promise = if fence_ok {
@@ -1366,7 +1366,7 @@ impl Db for MysqlDb<'_> {
         let fence_ok = task_row.as_ref().is_some_and(|r| {
             let s: String = r.get("state");
             let v: i32 = r.get("version");
-            s == "acquired" && v == version as i32
+            s == "acquired" && v == version
         });
 
         if fence_ok {
@@ -1404,7 +1404,7 @@ impl Db for MysqlDb<'_> {
         })
     }
 
-    fn task_heartbeat(&self, pid: &str, tasks: &[(&str, i64)], time: i64) -> StorageResult<()> {
+    fn task_heartbeat(&self, pid: &str, tasks: &[(&str, i32)], time: i64) -> StorageResult<()> {
         for (task_id, version) in tasks {
             rt_block_on(
                 sqlx::query(
@@ -1414,7 +1414,7 @@ impl Db for MysqlDb<'_> {
                      SET tt.timeout_at = ? + tt.ttl
                      WHERE tt.id = ? AND t.version = ? AND t.state = 'acquired' AND tt.process_id = ?
                        AND (p.state != 'pending' OR p.timeout_at > ?)"
-                ).bind(time).bind(task_id).bind(*version as i32).bind(pid).bind(time)
+                ).bind(time).bind(task_id).bind(*version).bind(pid).bind(time)
                  .execute(self.tx().as_mut())
             )?;
         }
@@ -1424,7 +1424,7 @@ impl Db for MysqlDb<'_> {
     fn task_suspend(
         &self,
         task_id: &str,
-        version: i64,
+        version: i32,
         awaited_ids: &[&str],
     ) -> StorageResult<TaskSuspendResult> {
         let awaited_ids: Vec<String> = awaited_ids.iter().map(|s| s.to_string()).collect();
@@ -1461,8 +1461,7 @@ impl Db for MysqlDb<'_> {
                 .fetch_optional(self.tx().as_mut()),
         )?;
         let task_matched = task_row.as_ref().is_some_and(|r| {
-            r.get::<String, _>("state") == "acquired"
-                && r.get::<i32, _>("version") == version as i32
+            r.get::<String, _>("state") == "acquired" && r.get::<i32, _>("version") == version
         });
         if !task_matched {
             return Ok(TaskSuspendResult {
@@ -1547,7 +1546,7 @@ impl Db for MysqlDb<'_> {
             rt_block_on(
                 sqlx::query(
                     "UPDATE tasks SET state = 'suspended' WHERE id = ? AND version = ? AND state = 'acquired'"
-                ).bind(task_id).bind(version as i32).execute(self.tx().as_mut())
+                ).bind(task_id).bind(version).execute(self.tx().as_mut())
             )?;
             Ok(TaskSuspendResult {
                 task_matched: true,
@@ -1598,7 +1597,7 @@ impl Db for MysqlDb<'_> {
         let task_res = rt_block_on(
             sqlx::query(
                 "UPDATE tasks SET state = 'fulfilled' WHERE id = ? AND version = ? AND state = 'acquired'"
-            ).bind(task_id).bind(version as i32).execute(self.tx().as_mut())
+            ).bind(task_id).bind(version).execute(self.tx().as_mut())
         )?;
         let task_fulfilled = task_res.rows_affected() > 0;
 
@@ -1647,14 +1646,14 @@ impl Db for MysqlDb<'_> {
     fn task_release(
         &self,
         task_id: &str,
-        version: i64,
+        version: i32,
         time: i64,
         ttl: i64,
     ) -> StorageResult<TaskReleaseResult> {
         let res = rt_block_on(
             sqlx::query(
                 "UPDATE tasks SET state = 'pending' WHERE id = ? AND version = ? AND state = 'acquired'"
-            ).bind(task_id).bind(version as i32).execute(self.tx().as_mut())
+            ).bind(task_id).bind(version).execute(self.tx().as_mut())
         )?;
         let task_released = res.rows_affected() > 0;
 
@@ -1792,11 +1791,11 @@ impl Db for MysqlDb<'_> {
         Ok(rows
             .iter()
             .map(|r| {
-                let resumes: i64 = r.get("resumes");
+                let resumes: i32 = r.get("resumes");
                 TaskRecord {
                     id: r.get("id"),
                     state: parse_task_state(&r.get::<String, _>("state")),
-                    version: r.get::<i32, _>("version") as i64,
+                    version: r.get("version"),
                     resumes,
                     ttl: r.get("ttl"),
                     pid: r.get("pid"),
@@ -2301,11 +2300,11 @@ impl Db for MysqlDb<'_> {
         let tasks: Vec<TaskRecord> = task_rows
             .iter()
             .map(|r| {
-                let resumes: i64 = r.get("resumes");
+                let resumes: i32 = r.get("resumes");
                 TaskRecord {
                     id: r.get("id"),
                     state: parse_task_state(&r.get::<String, _>("state")),
-                    version: r.get::<i32, _>("version") as i64,
+                    version: r.get("version"),
                     resumes,
                     ttl: r.get("ttl"),
                     pid: r.get("pid"),
@@ -2385,13 +2384,10 @@ impl Db for MysqlDb<'_> {
 
         let execute_msgs: Vec<OutgoingExecute> = exec_rows
             .iter()
-            .map(|r| {
-                let v: i32 = r.get("version");
-                OutgoingExecute {
-                    id: r.get("id"),
-                    version: v as i64,
-                    address: r.get("address"),
-                }
+            .map(|r| OutgoingExecute {
+                id: r.get("id"),
+                version: r.get("version"),
+                address: r.get("address"),
             })
             .collect();
 
