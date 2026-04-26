@@ -395,6 +395,11 @@ pub struct HttpPushConfig {
     /// HTTP request timeout (ms)
     #[serde(default = "default_http_push_request_timeout")]
     pub request_timeout: u64,
+
+    /// Outbound auth for HTTP push deliveries.
+    /// Absent (default) = no auth attached to outbound requests.
+    #[serde(default)]
+    pub auth: Option<HttpPushAuthConfig>,
 }
 
 fn default_http_push_concurrency() -> usize {
@@ -414,8 +419,70 @@ impl Default for HttpPushConfig {
             concurrency: default_http_push_concurrency(),
             connect_timeout: default_http_push_connect_timeout(),
             request_timeout: default_http_push_request_timeout(),
+            auth: None,
         }
     }
+}
+
+/// Outbound authentication for HTTP push deliveries.
+///
+/// Example config:
+/// ```toml
+/// [transports.http_push.auth]
+/// mode = "oidc_id_token"
+/// # audience = "https://my-function.example.com"  # optional; defaults to delivery URL
+/// ```
+///
+/// Equivalent env vars (double-underscore nesting):
+///   RESONATE_TRANSPORTS__HTTP_PUSH__AUTH__MODE=oidc_id_token
+///   RESONATE_TRANSPORTS__HTTP_PUSH__AUTH__AUDIENCE=https://...
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpPushAuthConfig {
+    /// Auth mode. Default: `none`.
+    #[serde(default)]
+    pub mode: HttpPushAuthMode,
+
+    /// Static bearer token. Used only when `mode = "bearer"`.
+    /// Falls back to the `RESONATE_TRANSPORTS__HTTP_PUSH__AUTH__TOKEN` env var.
+    #[serde(default)]
+    pub token: Option<String>,
+
+    /// OIDC audience override. Used only when `mode = "oidc_id_token"`.
+    /// When absent, each delivery target URL is used as its own audience.
+    #[serde(default)]
+    pub audience: Option<String>,
+
+    /// Header name to set. Default: `"Authorization"`.
+    #[serde(default = "default_auth_header")]
+    pub header: String,
+}
+
+fn default_auth_header() -> String {
+    "Authorization".to_string()
+}
+
+impl Default for HttpPushAuthConfig {
+    fn default() -> Self {
+        Self {
+            mode: HttpPushAuthMode::default(),
+            token: None,
+            audience: None,
+            header: default_auth_header(),
+        }
+    }
+}
+
+/// Outbound auth mode for HTTP push deliveries.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpPushAuthMode {
+    /// No auth header. Default.
+    #[default]
+    None,
+    /// Static `Authorization: Bearer <token>`.
+    Bearer,
+    /// Google OIDC ID token via Application Default Credentials.
+    OidcIdToken,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
