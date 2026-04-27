@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use tokio::process::Command;
 
 use crate::persistence::{Storage, TaskAcquireParams, TaskFulfillParams};
@@ -75,9 +74,7 @@ impl BashExecTransport {
         let server = Arc::clone(&self.server);
 
         tokio::spawn(async move {
-            if let Err(e) = run_task(server, task_id, task_version, mode, working_dir).await {
-                tracing::error!(error = %e, "bash-exec: task execution failed");
-            }
+            run_task(server, task_id, task_version, mode, working_dir).await;
         });
     }
 }
@@ -94,16 +91,14 @@ enum ScriptMode {
     File(PathBuf),
 }
 
-fn resolve_mode(address: &str, root_dir: Option<&Path>) -> anyhow::Result<ScriptMode> {
-    let parsed = url::Url::parse(address).map_err(|e| anyhow!("invalid address: {e}"))?;
+fn resolve_mode(address: &str, root_dir: Option<&Path>) -> Result<ScriptMode, String> {
+    let parsed = url::Url::parse(address).map_err(|e| format!("invalid address: {e}"))?;
     let path = parsed.path().trim_start_matches('/');
     if path.is_empty() {
         return Ok(ScriptMode::Inline);
     }
     match root_dir {
-        None => Err(anyhow!(
-            "bash:///path address requires bash_exec.root_dir in config"
-        )),
+        None => Err("bash:///path address requires bash_exec.root_dir in config".to_string()),
         Some(dir) => Ok(ScriptMode::File(dir.join(path))),
     }
 }
@@ -116,12 +111,12 @@ async fn run_task(
     task_version: i64,
     mode: ScriptMode,
     working_dir: Option<WorkingDirResolved>,
-) -> anyhow::Result<()> {
+) {
     let pid = format!("bash-exec-{}", fastrand::u64(..));
     let lease_timeout = server.config.tasks.lease_timeout;
 
     // 1. Acquire — racing is normal; storage errors are transient (drop, let lease expire).
-    let acquire_result = server
+    let acquire_result = match server
         .storage
         .transact({
             let task_id = task_id.clone();
@@ -137,11 +132,17 @@ async fn run_task(
             }
         })
         .await
-        .map_err(|e| anyhow!("{e}"))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "bash-exec: task execution failed");
+            return;
+        }
+    };
 
     if !acquire_result.was_acquired {
         tracing::debug!(task_id, "bash-exec: task not acquired");
-        return Ok(());
+        return;
     }
 
     let acquired_version = acquire_result.task_version.unwrap_or(task_version + 1);
@@ -156,7 +157,7 @@ async fn run_task(
                 "no promise returned after acquire",
             )
             .await;
-            return Ok(());
+            return;
         }
     };
 
@@ -178,7 +179,7 @@ async fn run_task(
                         "param.data is missing",
                     )
                     .await;
-                    return Ok(());
+                    return;
                 }
             };
             Command::new("bash")
@@ -198,7 +199,7 @@ async fn run_task(
                     &format!("script not found: {}", path.display()),
                 )
                 .await;
-                return Ok(());
+                return;
             }
             let args: Vec<String> = match param.as_deref() {
                 None | Some("") => vec![],
@@ -218,7 +219,7 @@ async fn run_task(
                             "param.data must be a JSON array for named scripts",
                         )
                         .await;
-                        return Ok(());
+                        return;
                     }
                 },
             };
@@ -252,7 +253,7 @@ async fn run_task(
                 &format!("failed to spawn bash: {e}"),
             )
             .await;
-            return Ok(());
+            return;
         }
     };
 
@@ -326,8 +327,6 @@ async fn run_task(
             }
         }
     }
-
-    Ok(())
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

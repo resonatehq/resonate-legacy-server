@@ -2577,7 +2577,6 @@ dependencies = [
 name = "resonate"
 version = "0.9.4"
 dependencies = [
- "anyhow",
  "async-stream",
  "async-trait",
  "axum",
