@@ -49,19 +49,17 @@ impl Auth {
         match self {
             Auth::None => None,
             Auth::StaticBearer { header, value } => Some((header.clone(), value.clone())),
-            Auth::OidcIdToken { header, provider } => {
-                match provider.get_token(target_url).await {
-                    Ok(token) => Some((header.clone(), format!("Bearer {token}"))),
-                    Err(err) => {
-                        tracing::warn!(
-                            target_url = %target_url,
-                            error = %err,
-                            "OIDC ID token mint failed; sending request unauthenticated"
-                        );
-                        None
-                    }
+            Auth::OidcIdToken { header, provider } => match provider.get_token(target_url).await {
+                Ok(token) => Some((header.clone(), format!("Bearer {token}"))),
+                Err(err) => {
+                    tracing::warn!(
+                        target_url = %target_url,
+                        error = %err,
+                        "OIDC ID token mint failed; sending request unauthenticated"
+                    );
+                    None
                 }
-            }
+            },
         }
     }
 }
@@ -81,7 +79,11 @@ pub struct OidcIdTokenProvider {
 
 impl OidcIdTokenProvider {
     fn new(client: Client, fixed_audience: Option<String>) -> Self {
-        Self { client, fixed_audience, cache: Mutex::new(HashMap::new()) }
+        Self {
+            client,
+            fixed_audience,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     async fn get_token(&self, target_url: &str) -> Result<String, String> {
@@ -108,7 +110,13 @@ impl OidcIdTokenProvider {
             .map_err(|e| format!("metadata server body: {e}"))?;
 
         let expires_at = jwt_exp_instant(&token);
-        cache.insert(audience.to_string(), CachedToken { value: token.clone(), expires_at });
+        cache.insert(
+            audience.to_string(),
+            CachedToken {
+                value: token.clone(),
+                expires_at,
+            },
+        );
 
         Ok(token)
     }
@@ -170,10 +178,14 @@ impl HttpPushTransport {
                 let status = resp.status().as_u16();
                 if resp.status().is_success() {
                     tracing::debug!(address = %address.url, status, "HTTP push delivery succeeded");
-                    metrics::DELIVERIES_TOTAL.with_label_values(&["success"]).inc();
+                    metrics::DELIVERIES_TOTAL
+                        .with_label_values(&["success"])
+                        .inc();
                 } else {
                     tracing::warn!(address = %address.url, status, "HTTP push delivery rejected by target");
-                    metrics::DELIVERIES_TOTAL.with_label_values(&["error"]).inc();
+                    metrics::DELIVERIES_TOTAL
+                        .with_label_values(&["error"])
+                        .inc();
                 }
             }
             Err(e) => {
@@ -183,7 +195,9 @@ impl HttpPushTransport {
                     error_kind = if e.is_connect() { "connect" } else if e.is_timeout() { "timeout" } else { "other" },
                     "HTTP push delivery failed"
                 );
-                metrics::DELIVERIES_TOTAL.with_label_values(&["error"]).inc();
+                metrics::DELIVERIES_TOTAL
+                    .with_label_values(&["error"])
+                    .inc();
             }
         }
     }
