@@ -321,6 +321,34 @@ pub struct TransportsConfig {
     /// Google Cloud Pub/Sub transport configuration
     #[serde(default)]
     pub gcps: Option<GcpsConfig>,
+
+    /// Bash execution transport configuration
+    #[serde(default)]
+    pub bash_exec: Option<BashExecConfig>,
+}
+
+/// Bash execution transport configuration.
+///
+/// When present, enables the bash:// address scheme.
+/// Inline scripts (bash://) are read from param.data.
+/// Named scripts (bash:///relative/path.sh) are resolved relative to root_dir.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BashExecConfig {
+    /// Root directory for named scripts (bash:///relative/path.sh).
+    /// Not required if only inline scripts are used.
+    #[serde(default)]
+    pub root_dir: Option<String>,
+
+    /// Working directory for named script execution.
+    /// "<root>"   — CWD is set to root_dir (default)
+    /// "<script>" — CWD is set to the directory containing the script
+    /// any path   — CWD is set to that literal path
+    #[serde(default = "default_working_dir")]
+    pub working_dir: String,
+}
+
+fn default_working_dir() -> String {
+    "<root>".to_string()
 }
 
 /// Google Cloud Pub/Sub transport configuration.
