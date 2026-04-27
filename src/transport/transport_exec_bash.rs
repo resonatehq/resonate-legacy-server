@@ -46,10 +46,7 @@ impl BashExecTransport {
     }
 
     pub async fn send(&self, address: &str, payload: &serde_json::Value) {
-        let task_id = match payload
-            .pointer("/data/task/id")
-            .and_then(|v| v.as_str())
-        {
+        let task_id = match payload.pointer("/data/task/id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 tracing::warn!("bash-exec: missing task.id in execute payload");
@@ -88,8 +85,8 @@ impl BashExecTransport {
 // ─── Script and working directory modes ──────────────────────────────────────
 
 enum WorkingDirResolved {
-    Fixed(PathBuf),  // root_dir or an explicit path
-    ScriptDir,       // resolved at run time from the script path
+    Fixed(PathBuf), // root_dir or an explicit path
+    ScriptDir,      // resolved at run time from the script path
 }
 
 enum ScriptMode {
@@ -152,7 +149,13 @@ async fn run_task(
     let promise = match acquire_result.promise {
         Some(p) => p,
         None => {
-            reject_promise(&server.storage, &task_id, acquired_version, "no promise returned after acquire").await;
+            reject_promise(
+                &server.storage,
+                &task_id,
+                acquired_version,
+                "no promise returned after acquire",
+            )
+            .await;
             return Ok(());
         }
     };
@@ -168,7 +171,13 @@ async fn run_task(
             let script = match param {
                 Some(s) => s,
                 None => {
-                    reject_promise(&server.storage, &task_id, acquired_version, "param.data is missing").await;
+                    reject_promise(
+                        &server.storage,
+                        &task_id,
+                        acquired_version,
+                        "param.data is missing",
+                    )
+                    .await;
                     return Ok(());
                 }
             };
@@ -182,18 +191,33 @@ async fn run_task(
         }
         ScriptMode::File(path) => {
             if !path.exists() {
-                reject_promise(&server.storage, &task_id, acquired_version, &format!("script not found: {}", path.display())).await;
+                reject_promise(
+                    &server.storage,
+                    &task_id,
+                    acquired_version,
+                    &format!("script not found: {}", path.display()),
+                )
+                .await;
                 return Ok(());
             }
             let args: Vec<String> = match param.as_deref() {
                 None | Some("") => vec![],
                 Some(s) => match serde_json::from_str::<Vec<serde_json::Value>>(s) {
-                    Ok(arr) => arr.iter().map(|v| match v {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    }).collect(),
+                    Ok(arr) => arr
+                        .iter()
+                        .map(|v| match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        })
+                        .collect(),
                     Err(_) => {
-                        reject_promise(&server.storage, &task_id, acquired_version, "param.data must be a JSON array for named scripts").await;
+                        reject_promise(
+                            &server.storage,
+                            &task_id,
+                            acquired_version,
+                            "param.data must be a JSON array for named scripts",
+                        )
+                        .await;
                         return Ok(());
                     }
                 },
@@ -221,7 +245,13 @@ async fn run_task(
     let child = match child {
         Ok(c) => c,
         Err(e) => {
-            reject_promise(&server.storage, &task_id, acquired_version, &format!("failed to spawn bash: {e}")).await;
+            reject_promise(
+                &server.storage,
+                &task_id,
+                acquired_version,
+                &format!("failed to spawn bash: {e}"),
+            )
+            .await;
             return Ok(());
         }
     };
@@ -255,7 +285,13 @@ async fn run_task(
     // 6. Handle outcome.
     match output {
         Err(e) => {
-            reject_promise(&server.storage, &task_id, acquired_version, &format!("bash wait failed: {e}")).await;
+            reject_promise(
+                &server.storage,
+                &task_id,
+                acquired_version,
+                &format!("bash wait failed: {e}"),
+            )
+            .await;
         }
         Ok(out) => {
             let now = system_time_ms();

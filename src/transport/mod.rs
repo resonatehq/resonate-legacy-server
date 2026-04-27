@@ -26,7 +26,12 @@ impl TransportDispatcher {
         gcps: Option<Arc<GcpsPubSubTransport>>,
         bash: Option<Arc<BashExecTransport>>,
     ) -> Self {
-        Self { http, poll, gcps, bash }
+        Self {
+            http,
+            poll,
+            gcps,
+            bash,
+        }
     }
 
     /// Parse the address, route to the correct transport, deliver.
@@ -56,7 +61,12 @@ impl TransportDispatcher {
             },
             Some(Address::Bash(_)) => match &self.bash {
                 Some(bash) => {
-                    tracing::debug!(transport = "bash", address, kind, "Dispatching message via bash exec");
+                    tracing::debug!(
+                        transport = "bash",
+                        address,
+                        kind,
+                        "Dispatching message via bash exec"
+                    );
                     bash.send(address, payload).await;
                 }
                 None => {
@@ -168,6 +178,9 @@ mod tests {
     #[test]
     fn bash_address_parses() {
         assert!(matches!(parse_address("bash://"), Some(Address::Bash(_))));
-        assert!(matches!(parse_address("bash://inline"), Some(Address::Bash(_))));
+        assert!(matches!(
+            parse_address("bash://inline"),
+            Some(Address::Bash(_))
+        ));
     }
 }

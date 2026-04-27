@@ -254,15 +254,20 @@ async fn run_server(config: Config) -> Result<(), String> {
     let bash = match &state.config.transports.bash_exec {
         Some(bash_cfg) => {
             match &bash_cfg.root_dir {
-                Some(dir) => tracing::info!(root_dir = %dir, working_dir = %bash_cfg.working_dir, "Bash exec transport enabled"),
+                Some(dir) => {
+                    tracing::info!(root_dir = %dir, working_dir = %bash_cfg.working_dir, "Bash exec transport enabled")
+                }
                 None => tracing::info!("Bash exec transport enabled (inline only)"),
             }
-            let working_dir = transport::transport_exec_bash::WorkingDir::from_config(&bash_cfg.working_dir);
-            Some(Arc::new(transport::transport_exec_bash::BashExecTransport::new(
-                Arc::clone(&state),
-                bash_cfg.root_dir.as_deref(),
-                working_dir,
-            )))
+            let working_dir =
+                transport::transport_exec_bash::WorkingDir::from_config(&bash_cfg.working_dir);
+            Some(Arc::new(
+                transport::transport_exec_bash::BashExecTransport::new(
+                    Arc::clone(&state),
+                    bash_cfg.root_dir.as_deref(),
+                    working_dir,
+                ),
+            ))
         }
         None => None,
     };
