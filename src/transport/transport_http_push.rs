@@ -21,9 +21,9 @@ pub enum Auth {
         header: String,
         value: String,
     },
-    OidcIdToken {
+    GcpIdToken {
         header: String,
-        provider: OidcIdTokenProvider,
+        provider: GcpIdTokenProvider,
     },
 }
 
@@ -38,9 +38,9 @@ impl Auth {
                     value: format!("Bearer {token}"),
                 }
             }
-            HttpPushAuthMode::OidcIdToken => Auth::OidcIdToken {
+            HttpPushAuthMode::Gcp => Auth::GcpIdToken {
                 header: config.header.clone(),
-                provider: OidcIdTokenProvider::new(client, config.audience.clone()),
+                provider: GcpIdTokenProvider::new(client, config.audience.clone()),
             },
         }
     }
@@ -49,7 +49,7 @@ impl Auth {
         match self {
             Auth::None => None,
             Auth::StaticBearer { header, value } => Some((header.clone(), value.clone())),
-            Auth::OidcIdToken { header, provider } => match provider.get_token(target_url).await {
+            Auth::GcpIdToken { header, provider } => match provider.get_token(target_url).await {
                 Ok(token) => Some((header.clone(), format!("Bearer {token}"))),
                 Err(err) => {
                     tracing::warn!(
@@ -71,13 +71,13 @@ struct CachedToken {
     expires_at: Instant,
 }
 
-pub struct OidcIdTokenProvider {
+pub struct GcpIdTokenProvider {
     client: Client,
     fixed_audience: Option<String>,
     cache: Mutex<HashMap<String, CachedToken>>,
 }
 
-impl OidcIdTokenProvider {
+impl GcpIdTokenProvider {
     fn new(client: Client, fixed_audience: Option<String>) -> Self {
         Self {
             client,

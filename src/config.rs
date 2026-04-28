@@ -429,12 +429,12 @@ impl Default for HttpPushConfig {
 /// Example config:
 /// ```toml
 /// [transports.http_push.auth]
-/// mode = "oidc_id_token"
+/// mode = "gcp"
 /// # audience = "https://my-function.example.com"  # optional; defaults to delivery URL
 /// ```
 ///
 /// Equivalent env vars (double-underscore nesting):
-///   RESONATE_TRANSPORTS__HTTP_PUSH__AUTH__MODE=oidc_id_token
+///   RESONATE_TRANSPORTS__HTTP_PUSH__AUTH__MODE=gcp
 ///   RESONATE_TRANSPORTS__HTTP_PUSH__AUTH__AUDIENCE=https://...
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpPushAuthConfig {
@@ -447,7 +447,7 @@ pub struct HttpPushAuthConfig {
     #[serde(default)]
     pub token: Option<String>,
 
-    /// OIDC audience override. Used only when `mode = "oidc_id_token"`.
+    /// GCP audience override. Used only when `mode = "gcp"`.
     /// When absent, each delivery target URL is used as its own audience.
     #[serde(default)]
     pub audience: Option<String>,
@@ -481,8 +481,8 @@ pub enum HttpPushAuthMode {
     None,
     /// Static `Authorization: Bearer <token>`.
     Bearer,
-    /// Google OIDC ID token via Application Default Credentials.
-    OidcIdToken,
+    /// GCP OIDC ID token via the GCP metadata server.
+    Gcp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

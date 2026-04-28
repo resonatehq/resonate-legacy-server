@@ -136,7 +136,7 @@ pub struct CommonArgs {
     pub transports_http_poll_buffer_size: Option<usize>,
 
     // --- HTTP Push Auth ---
-    /// Outbound auth mode for HTTP push deliveries: none, bearer, oidc_id_token [default: none]
+    /// Outbound auth mode for HTTP push deliveries: none, bearer, gcp [default: none]
     #[arg(long = "transports-http-push-auth-mode", value_name = "MODE")]
     pub transports_http_push_auth_mode: Option<String>,
 
@@ -144,8 +144,8 @@ pub struct CommonArgs {
     #[arg(long = "transports-http-push-auth-token", value_name = "TOKEN")]
     pub transports_http_push_auth_token: Option<String>,
 
-    /// OIDC audience override for HTTP push auth (mode=oidc_id_token; defaults to delivery target URL)
-    #[arg(long = "transports-http-push-auth-audience", value_name = "URL")]
+    /// GCP audience for HTTP push auth (mode=gcp; defaults to delivery target URL)
+    #[arg(long = "transports-http-push-auth-aud", value_name = "URL")]
     pub transports_http_push_auth_audience: Option<String>,
 
     /// Authorization header name for HTTP push auth [default: Authorization]
@@ -292,7 +292,7 @@ impl CommonArgs {
         if let Some(mode_str) = self.transports_http_push_auth_mode {
             let mode = match mode_str.as_str() {
                 "bearer" => crate::config::HttpPushAuthMode::Bearer,
-                "oidc_id_token" => crate::config::HttpPushAuthMode::OidcIdToken,
+                "gcp" => crate::config::HttpPushAuthMode::Gcp,
                 _ => crate::config::HttpPushAuthMode::None,
             };
             let auth = config
