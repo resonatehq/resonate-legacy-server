@@ -320,20 +320,20 @@ pub struct TransportsConfig {
 
     /// Google Cloud Pub/Sub transport configuration
     #[serde(default)]
-    pub gcps: Option<GcpsConfig>,
+    pub gcps: GcpsConfig,
 
     /// Bash execution transport configuration
     #[serde(default)]
-    pub bash_exec: Option<BashExecConfig>,
+    pub bash_exec: BashExecConfig,
 }
 
 /// Bash execution transport configuration.
-///
-/// When present, enables the bash:// address scheme.
-/// Inline scripts (bash://) are read from param.data.
-/// Named scripts (bash:///relative/path.sh) are resolved relative to root_dir.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BashExecConfig {
+    /// Enable the bash:// address scheme [default: false]
+    #[serde(default)]
+    pub enabled: bool,
+
     /// Root directory for named scripts (bash:///relative/path.sh).
     /// Not required if only inline scripts are used.
     #[serde(default)]
@@ -351,19 +351,39 @@ fn default_working_dir() -> String {
     "<root>".to_string()
 }
 
+impl Default for BashExecConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            root_dir: None,
+            working_dir: default_working_dir(),
+        }
+    }
+}
+
 /// Google Cloud Pub/Sub transport configuration.
-///
-/// When present, enables the gcps:// address scheme.
 /// Authentication uses Application Default Credentials (ADC).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GcpsConfig {
+    /// Enable the gcps:// address scheme [default: false]
+    #[serde(default)]
+    pub enabled: bool,
+
     /// Default GCP project ID. Used when the address doesn't specify a project.
     #[serde(default)]
     pub project: Option<String>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpPushConfig {
+    /// Enable the http:// / https:// address scheme [default: true]
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
     /// Max concurrent HTTP push deliveries
     #[serde(default = "default_http_push_concurrency")]
     pub concurrency: usize,
@@ -390,6 +410,7 @@ fn default_http_push_request_timeout() -> u64 {
 impl Default for HttpPushConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             concurrency: default_http_push_concurrency(),
             connect_timeout: default_http_push_connect_timeout(),
             request_timeout: default_http_push_request_timeout(),
@@ -399,6 +420,10 @@ impl Default for HttpPushConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpPollConfig {
+    /// Enable the poll:// (SSE) address scheme [default: true]
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
     /// Maximum number of concurrent poll (SSE) connections
     #[serde(default = "default_http_poll_max_connections")]
     pub max_connections: usize,
@@ -418,6 +443,7 @@ fn default_http_poll_buffer_size() -> usize {
 impl Default for HttpPollConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             max_connections: default_http_poll_max_connections(),
             buffer_size: default_http_poll_buffer_size(),
         }
