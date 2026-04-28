@@ -106,6 +106,10 @@ pub struct CommonArgs {
     pub messages_batch_size: Option<i64>,
 
     // --- HTTP Push ---
+    /// Enable/disable HTTP push transport [default: true]
+    #[arg(long = "transports-http-push-enabled", value_name = "BOOL")]
+    pub transports_http_push_enabled: Option<bool>,
+
     /// Max concurrent HTTP push deliveries [default: 16]
     #[arg(long = "transports-http-push-concurrency", value_name = "N")]
     pub transports_http_push_concurrency: Option<usize>,
@@ -119,6 +123,10 @@ pub struct CommonArgs {
     pub transports_http_push_request_timeout: Option<u64>,
 
     // --- HTTP Poll/SSE ---
+    /// Enable/disable HTTP poll (SSE) transport [default: true]
+    #[arg(long = "transports-http-poll-enabled", value_name = "BOOL")]
+    pub transports_http_poll_enabled: Option<bool>,
+
     /// Max concurrent poll (SSE) connections [default: 1000]
     #[arg(long = "transports-http-poll-max-connections", value_name = "N")]
     pub transports_http_poll_max_connections: Option<usize>,
@@ -128,9 +136,18 @@ pub struct CommonArgs {
     pub transports_http_poll_buffer_size: Option<usize>,
 
     // --- GCP Pub/Sub ---
-    /// GCP project ID (enables GCP Pub/Sub transport)
+    /// Enable/disable GCP Pub/Sub transport [default: false]
+    #[arg(long = "transports-gcps-enabled", value_name = "BOOL")]
+    pub transports_gcps_enabled: Option<bool>,
+
+    /// GCP project ID
     #[arg(long = "transports-gcps-project", value_name = "PROJECT")]
     pub transports_gcps_project: Option<String>,
+
+    // --- Bash Exec ---
+    /// Enable/disable bash exec transport [default: false]
+    #[arg(long = "transports-bash-exec-enabled", value_name = "BOOL")]
+    pub transports_bash_exec_enabled: Option<bool>,
 
     // --- Observability ---
     /// Prometheus metrics port (0 = disabled) [default: 9090]
@@ -232,6 +249,9 @@ impl CommonArgs {
             config.messages.batch_size = v;
         }
 
+        if let Some(v) = self.transports_http_push_enabled {
+            config.transports.http_push.enabled = v;
+        }
         if let Some(v) = self.transports_http_push_concurrency {
             config.transports.http_push.concurrency = v;
         }
@@ -242,6 +262,9 @@ impl CommonArgs {
             config.transports.http_push.request_timeout = v;
         }
 
+        if let Some(v) = self.transports_http_poll_enabled {
+            config.transports.http_poll.enabled = v;
+        }
         if let Some(v) = self.transports_http_poll_max_connections {
             config.transports.http_poll.max_connections = v;
         }
@@ -249,12 +272,15 @@ impl CommonArgs {
             config.transports.http_poll.buffer_size = v;
         }
 
+        if let Some(v) = self.transports_gcps_enabled {
+            config.transports.gcps.enabled = v;
+        }
         if let Some(project) = self.transports_gcps_project {
-            let gcps = config
-                .transports
-                .gcps
-                .get_or_insert(crate::config::GcpsConfig { project: None });
-            gcps.project = Some(project);
+            config.transports.gcps.project = Some(project);
+        }
+
+        if let Some(v) = self.transports_bash_exec_enabled {
+            config.transports.bash_exec.enabled = v;
         }
 
         if let Some(v) = self.observability_metrics_port {
