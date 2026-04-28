@@ -39,7 +39,12 @@ impl TokenProvider for GcpIdTokenProvider {
             let c = IdTokenBuilder::new(audience)
                 .build()
                 .map_err(|e| e.to_string())?;
-            self.cache.lock().unwrap().entry(audience.to_string()).or_insert(c).clone()
+            self.cache
+                .lock()
+                .unwrap()
+                .entry(audience.to_string())
+                .or_insert(c)
+                .clone()
         };
         creds.id_token().await.map_err(|e| e.to_string())
     }
@@ -178,8 +183,8 @@ impl HttpPushTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{extract::State, routing::post, Router};
     use crate::transport::HttpAddress;
+    use axum::{extract::State, routing::post, Router};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::net::TcpListener;
@@ -375,7 +380,10 @@ mod tests {
         })
         .send(&HttpAddress { url }, &serde_json::json!({}))
         .await;
-        let headers = rx.recv().await.expect("delivery target received no request");
+        let headers = rx
+            .recv()
+            .await
+            .expect("delivery target received no request");
         assert_eq!(
             headers
                 .get("x-goog-token")
@@ -400,7 +408,10 @@ mod tests {
         })
         .send(&HttpAddress { url }, &serde_json::json!({}))
         .await;
-        let headers = rx.recv().await.expect("delivery target received no request");
+        let headers = rx
+            .recv()
+            .await
+            .expect("delivery target received no request");
         assert!(
             !headers.contains_key("authorization"),
             "expected no Authorization header on token failure"

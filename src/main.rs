@@ -256,11 +256,13 @@ async fn run_server(config: Config) -> Result<(), String> {
                 transport::transport_http_push::Auth::None
             }
         };
-        Some(Arc::new(transport::transport_http_push::HttpPushTransport::new(
-            connect_timeout,
-            request_timeout,
-            outbound_auth,
-        )))
+        Some(Arc::new(
+            transport::transport_http_push::HttpPushTransport::new(
+                connect_timeout,
+                request_timeout,
+                outbound_auth,
+            ),
+        ))
     } else {
         tracing::info!("HTTP push transport disabled");
         None
