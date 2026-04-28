@@ -239,11 +239,28 @@ async fn run_server(config: Config) -> Result<(), String> {
         "Transport config"
     );
     let poll_registry = Arc::new(PollRegistry::new(poll_max_connections, poll_buffer_size));
+    let connect_timeout =
+        std::time::Duration::from_millis(state.config.transports.http_push.connect_timeout);
+    let request_timeout =
+        std::time::Duration::from_millis(state.config.transports.http_push.request_timeout);
     let http_push: Option<Arc<dyn HttpTransport>> = if state.config.transports.http_push.enabled {
+        let outbound_auth = match &state.config.transports.http_push.auth {
+            Some(auth_cfg) => {
+                let mode_label = format!("{:?}", auth_cfg.mode);
+                let auth = transport::transport_http_push::Auth::from_config(auth_cfg);
+                tracing::info!(mode = %mode_label, "HTTP push outbound auth enabled");
+                auth
+            }
+            None => {
+                tracing::debug!("HTTP push outbound auth: none");
+                transport::transport_http_push::Auth::None
+            }
+        };
         Some(Arc::new(
             transport::transport_http_push::HttpPushTransport::new(
-                std::time::Duration::from_millis(state.config.transports.http_push.connect_timeout),
-                std::time::Duration::from_millis(state.config.transports.http_push.request_timeout),
+                connect_timeout,
+                request_timeout,
+                outbound_auth,
             ),
         ))
     } else {

@@ -135,6 +135,23 @@ pub struct CommonArgs {
     #[arg(long = "transports-http-poll-buffer-size", value_name = "N")]
     pub transports_http_poll_buffer_size: Option<usize>,
 
+    // --- HTTP Push Auth ---
+    /// Outbound auth mode for HTTP push deliveries: none, bearer, gcp [default: none]
+    #[arg(long = "transports-http-push-auth-mode", value_name = "MODE")]
+    pub transports_http_push_auth_mode: Option<String>,
+
+    /// Static bearer token for HTTP push auth (mode=bearer)
+    #[arg(long = "transports-http-push-auth-token", value_name = "TOKEN")]
+    pub transports_http_push_auth_token: Option<String>,
+
+    /// GCP audience for HTTP push auth (mode=gcp; defaults to delivery target URL)
+    #[arg(long = "transports-http-push-auth-aud", value_name = "URL")]
+    pub transports_http_push_auth_audience: Option<String>,
+
+    /// Authorization header name for HTTP push auth [default: Authorization]
+    #[arg(long = "transports-http-push-auth-header", value_name = "HEADER")]
+    pub transports_http_push_auth_header: Option<String>,
+
     // --- GCP Pub/Sub ---
     /// Enable/disable GCP Pub/Sub transport [default: false]
     #[arg(long = "transports-gcps-enabled", value_name = "BOOL")]
@@ -270,6 +287,29 @@ impl CommonArgs {
         }
         if let Some(v) = self.transports_http_poll_buffer_size {
             config.transports.http_poll.buffer_size = v;
+        }
+
+        if let Some(mode_str) = self.transports_http_push_auth_mode {
+            let mode = match mode_str.as_str() {
+                "bearer" => crate::config::HttpPushAuthMode::Bearer,
+                "gcp" => crate::config::HttpPushAuthMode::Gcp,
+                _ => crate::config::HttpPushAuthMode::None,
+            };
+            let auth = config
+                .transports
+                .http_push
+                .auth
+                .get_or_insert_with(crate::config::HttpPushAuthConfig::default);
+            auth.mode = mode;
+            if let Some(v) = self.transports_http_push_auth_token {
+                auth.token = Some(v);
+            }
+            if let Some(v) = self.transports_http_push_auth_audience {
+                auth.audience = Some(v);
+            }
+            if let Some(v) = self.transports_http_push_auth_header {
+                auth.header = v;
+            }
         }
 
         if let Some(v) = self.transports_gcps_enabled {
@@ -414,9 +454,11 @@ async fn post(server: &str, kind: &str, token: Option<&str>, data: Value) -> Res
 
     let body = build_envelope(kind, &gen_corr_id(), token, data);
 
-    let resp = client
-        .post(&url)
-        .json(&body)
+    let mut req = client.post(&url).json(&body);
+    if let Some(t) = token {
+        req = req.header("Authorization", format!("Bearer {}", t));
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Connection error: {}", e))?;
