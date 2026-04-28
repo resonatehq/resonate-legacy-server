@@ -246,13 +246,8 @@ async fn run_server(config: Config) -> Result<(), String> {
     let http_push: Option<Arc<dyn HttpTransport>> = if state.config.transports.http_push.enabled {
         let outbound_auth = match &state.config.transports.http_push.auth {
             Some(auth_cfg) => {
-                let client = reqwest::Client::builder()
-                    .connect_timeout(connect_timeout)
-                    .timeout(request_timeout)
-                    .build()
-                    .expect("failed to build HTTP auth client");
                 let mode_label = format!("{:?}", auth_cfg.mode);
-                let auth = transport::transport_http_push::Auth::from_config(auth_cfg, client);
+                let auth = transport::transport_http_push::Auth::from_config(auth_cfg);
                 tracing::info!(mode = %mode_label, "HTTP push outbound auth enabled");
                 auth
             }

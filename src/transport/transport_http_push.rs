@@ -1,15 +1,49 @@
 //! HTTP transport — send messages via HTTP POST to webhook URLs.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::Duration;
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reqwest::Client;
-use tokio::sync::Mutex;
 
 use super::HttpAddress;
 use crate::config::{HttpPushAuthConfig, HttpPushAuthMode};
 use crate::metrics;
+
+// ---------------------------------------------------------------------------
+// Token provider abstraction
+// ---------------------------------------------------------------------------
+
+#[async_trait::async_trait]
+pub trait TokenProvider: Send + Sync {
+    async fn get_token(&self, audience: &str) -> Result<String, String>;
+}
+
+// ---------------------------------------------------------------------------
+// GCP ID token provider (backed by google-cloud-auth)
+// ---------------------------------------------------------------------------
+
+use google_cloud_auth::credentials::idtoken::{Builder as IdTokenBuilder, IDTokenCredentials};
+
+struct GcpIdTokenProvider {
+    cache: Mutex<HashMap<String, IDTokenCredentials>>,
+}
+
+#[async_trait::async_trait]
+impl TokenProvider for GcpIdTokenProvider {
+    async fn get_token(&self, audience: &str) -> Result<String, String> {
+        let cached = self.cache.lock().unwrap().get(audience).cloned();
+        let creds = if let Some(c) = cached {
+            c
+        } else {
+            let c = IdTokenBuilder::new(audience)
+                .build()
+                .map_err(|e| e.to_string())?;
+            self.cache.lock().unwrap().entry(audience.to_string()).or_insert(c).clone()
+        };
+        creds.id_token().await.map_err(|e| e.to_string())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Outbound auth
@@ -23,12 +57,13 @@ pub enum Auth {
     },
     GcpIdToken {
         header: String,
-        provider: GcpIdTokenProvider,
+        fixed_audience: Option<String>,
+        provider: Box<dyn TokenProvider>,
     },
 }
 
 impl Auth {
-    pub fn from_config(config: &HttpPushAuthConfig, client: Client) -> Self {
+    pub fn from_config(config: &HttpPushAuthConfig) -> Self {
         match config.mode {
             HttpPushAuthMode::None => Auth::None,
             HttpPushAuthMode::Bearer => {
@@ -40,7 +75,10 @@ impl Auth {
             }
             HttpPushAuthMode::Gcp => Auth::GcpIdToken {
                 header: config.header.clone(),
-                provider: GcpIdTokenProvider::new(client, config.audience.clone(), GCP_METADATA_URL.to_string()),
+                fixed_audience: config.audience.clone(),
+                provider: Box::new(GcpIdTokenProvider {
+                    cache: Mutex::new(HashMap::new()),
+                }),
             },
         }
     }
@@ -49,98 +87,25 @@ impl Auth {
         match self {
             Auth::None => None,
             Auth::StaticBearer { header, value } => Some((header.clone(), value.clone())),
-            Auth::GcpIdToken { header, provider } => match provider.get_token(target_url).await {
-                Ok(token) => Some((header.clone(), format!("Bearer {token}"))),
-                Err(err) => {
-                    tracing::warn!(
-                        target_url = %target_url,
-                        error = %err,
-                        "OIDC ID token mint failed; sending request unauthenticated"
-                    );
-                    None
+            Auth::GcpIdToken {
+                header,
+                fixed_audience,
+                provider,
+            } => {
+                let audience = fixed_audience.as_deref().unwrap_or(target_url);
+                match provider.get_token(audience).await {
+                    Ok(token) => Some((header.clone(), format!("Bearer {token}"))),
+                    Err(err) => {
+                        tracing::warn!(
+                            target_url = %target_url,
+                            error = %err,
+                            "OIDC ID token mint failed; sending request unauthenticated"
+                        );
+                        None
+                    }
                 }
-            },
-        }
-    }
-}
-
-const REFRESH_BUFFER: Duration = Duration::from_secs(60);
-const GCP_METADATA_URL: &str = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity";
-
-struct CachedToken {
-    value: String,
-    expires_at: Instant,
-}
-
-pub struct GcpIdTokenProvider {
-    client: Client,
-    fixed_audience: Option<String>,
-    metadata_url: String,
-    cache: Mutex<HashMap<String, CachedToken>>,
-}
-
-impl GcpIdTokenProvider {
-    fn new(client: Client, fixed_audience: Option<String>, metadata_url: String) -> Self {
-        Self {
-            client,
-            fixed_audience,
-            metadata_url,
-            cache: Mutex::new(HashMap::new()),
-        }
-    }
-
-    async fn get_token(&self, target_url: &str) -> Result<String, String> {
-        let audience = self.fixed_audience.as_deref().unwrap_or(target_url);
-
-        let mut cache = self.cache.lock().await;
-        if let Some(entry) = cache.get(audience) {
-            if entry.expires_at > Instant::now() + REFRESH_BUFFER {
-                return Ok(entry.value.clone());
             }
         }
-
-        let token = self
-            .client
-            .get(&self.metadata_url)
-            .query(&[("audience", audience), ("format", "full")])
-            .header("Metadata-Flavor", "Google")
-            .timeout(Duration::from_secs(5))
-            .send()
-            .await
-            .map_err(|e| format!("metadata server request: {e}"))?
-            .text()
-            .await
-            .map_err(|e| format!("metadata server body: {e}"))?;
-
-        let expires_at = jwt_exp_instant(&token);
-        cache.insert(
-            audience.to_string(),
-            CachedToken {
-                value: token.clone(),
-                expires_at,
-            },
-        );
-
-        Ok(token)
-    }
-}
-
-fn jwt_exp_instant(token: &str) -> Instant {
-    let payload = token.split('.').nth(1);
-    let exp = payload.and_then(|p| {
-        let decoded = URL_SAFE_NO_PAD.decode(p).ok()?;
-        let v: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
-        v["exp"].as_u64()
-    });
-    match exp {
-        Some(exp) => {
-            let now_unix = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            Instant::now() + Duration::from_secs(exp.saturating_sub(now_unix))
-        }
-        None => Instant::now() + Duration::from_secs(3600),
     }
 }
 
@@ -220,8 +185,44 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
 
-    /// Spawns a minimal Axum server on a random port that captures each
-    /// request's headers and forwards them over the returned channel.
+    struct MockTokenProvider {
+        result: Result<String, String>,
+        recorded_audience: Mutex<Option<String>>,
+    }
+
+    impl MockTokenProvider {
+        fn ok(token: impl Into<String>) -> Self {
+            Self {
+                result: Ok(token.into()),
+                recorded_audience: Mutex::new(None),
+            }
+        }
+
+        fn err(msg: impl Into<String>) -> Self {
+            Self {
+                result: Err(msg.into()),
+                recorded_audience: Mutex::new(None),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TokenProvider for MockTokenProvider {
+        async fn get_token(&self, audience: &str) -> Result<String, String> {
+            *self.recorded_audience.lock().unwrap() = Some(audience.to_string());
+            self.result.clone()
+        }
+    }
+
+    // Allow Arc<MockTokenProvider> to be boxed as dyn TokenProvider so tests can
+    // retain a handle to read recorded_audience after the send.
+    #[async_trait::async_trait]
+    impl TokenProvider for Arc<MockTokenProvider> {
+        async fn get_token(&self, audience: &str) -> Result<String, String> {
+            self.as_ref().get_token(audience).await
+        }
+    }
+
     async fn spawn_capture_server() -> (String, mpsc::Receiver<axum::http::HeaderMap>) {
         let (tx, rx) = mpsc::channel::<axum::http::HeaderMap>(1);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -245,39 +246,6 @@ mod tests {
     ) -> axum::http::StatusCode {
         let _ = tx.send(req.headers().clone()).await;
         axum::http::StatusCode::OK
-    }
-
-    /// Spawns a fake GCP metadata server that returns `fake_token` for every
-    /// request and forwards the query parameters to the returned channel.
-    async fn spawn_meta_server(fake_token: String) -> (String, mpsc::Receiver<HashMap<String, String>>) {
-        let (tx, rx) = mpsc::channel::<HashMap<String, String>>(1);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let tx = Arc::new(tx);
-
-        tokio::spawn(async move {
-            let app = Router::new().route(
-                "/",
-                axum::routing::get(
-                    move |axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>| {
-                        let token = fake_token.clone();
-                        let tx = tx.clone();
-                        async move {
-                            let _ = tx.send(params).await;
-                            token
-                        }
-                    },
-                ),
-            );
-            axum::serve(listener, app).await.unwrap();
-        });
-
-        (format!("http://127.0.0.1:{}/", addr.port()), rx)
-    }
-
-    fn fake_jwt() -> String {
-        let payload = URL_SAFE_NO_PAD.encode(r#"{"exp":9999999999}"#);
-        format!("header.{payload}.sig")
     }
 
     fn make_transport(auth: Auth) -> HttpPushTransport {
@@ -342,66 +310,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gcp_auth_fetches_token_from_metadata_server_and_sends_it() {
-        let fake_token = fake_jwt();
-        let (meta_url, mut meta_rx) = spawn_meta_server(fake_token.clone()).await;
+    async fn gcp_auth_fetches_token_and_sends_it() {
         let (url, mut rx) = spawn_capture_server().await;
-
         make_transport(Auth::GcpIdToken {
             header: "Authorization".to_string(),
-            provider: GcpIdTokenProvider::new(reqwest::Client::new(), None, meta_url),
+            fixed_audience: None,
+            provider: Box::new(MockTokenProvider::ok("mock-token")),
         })
         .send(&HttpAddress { url }, &serde_json::json!({}))
         .await;
-
-        meta_rx.recv().await.expect("metadata server was not called");
-
         assert_eq!(
-            rx.recv().await.expect("delivery target received no request")
+            rx.recv()
+                .await
+                .expect("delivery target received no request")
                 .get("authorization")
                 .expect("expected Authorization header")
                 .to_str()
                 .unwrap(),
-            format!("Bearer {fake_token}"),
+            "Bearer mock-token",
         );
     }
 
     #[tokio::test]
-    async fn gcp_auth_fixed_audience_is_sent_to_metadata_server() {
-        let (meta_url, mut meta_rx) = spawn_meta_server(fake_jwt()).await;
+    async fn gcp_auth_fixed_audience_is_passed_to_provider() {
         let (url, _rx) = spawn_capture_server().await;
-
+        let mock = Arc::new(MockTokenProvider::ok("mock-token"));
         make_transport(Auth::GcpIdToken {
             header: "Authorization".to_string(),
-            provider: GcpIdTokenProvider::new(
-                reqwest::Client::new(),
-                Some("https://my-audience.example.com".to_string()),
-                meta_url,
-            ),
+            fixed_audience: Some("https://my-audience.example.com".to_string()),
+            provider: Box::new(Arc::clone(&mock)),
         })
         .send(&HttpAddress { url }, &serde_json::json!({}))
         .await;
-
-        let params = meta_rx.recv().await.expect("metadata server was not called");
         assert_eq!(
-            params.get("audience").map(String::as_str),
+            mock.recorded_audience.lock().unwrap().as_deref(),
             Some("https://my-audience.example.com"),
         );
     }
 
     #[tokio::test]
-    async fn gcp_auth_with_custom_header_sends_token_in_that_header() {
-        let fake_token = fake_jwt();
-        let (meta_url, _meta_rx) = spawn_meta_server(fake_token.clone()).await;
-        let (url, mut rx) = spawn_capture_server().await;
+    async fn gcp_auth_target_url_used_as_audience_when_none_configured() {
+        let (url, _rx) = spawn_capture_server().await;
+        let mock = Arc::new(MockTokenProvider::ok("mock-token"));
+        make_transport(Auth::GcpIdToken {
+            header: "Authorization".to_string(),
+            fixed_audience: None,
+            provider: Box::new(Arc::clone(&mock)),
+        })
+        .send(&HttpAddress { url: url.clone() }, &serde_json::json!({}))
+        .await;
+        assert_eq!(
+            mock.recorded_audience.lock().unwrap().as_deref(),
+            Some(url.as_str()),
+        );
+    }
 
+    #[tokio::test]
+    async fn gcp_auth_with_custom_header_sends_token_in_that_header() {
+        let (url, mut rx) = spawn_capture_server().await;
         make_transport(Auth::GcpIdToken {
             header: "X-Goog-Token".to_string(),
-            provider: GcpIdTokenProvider::new(reqwest::Client::new(), None, meta_url),
+            fixed_audience: None,
+            provider: Box::new(MockTokenProvider::ok("mock-token")),
         })
         .send(&HttpAddress { url }, &serde_json::json!({}))
         .await;
-
         let headers = rx.recv().await.expect("delivery target received no request");
         assert_eq!(
             headers
@@ -409,11 +382,28 @@ mod tests {
                 .expect("expected X-Goog-Token header")
                 .to_str()
                 .unwrap(),
-            format!("Bearer {fake_token}"),
+            "Bearer mock-token",
         );
         assert!(
             !headers.contains_key("authorization"),
             "expected no standard Authorization header"
+        );
+    }
+
+    #[tokio::test]
+    async fn gcp_auth_token_failure_sends_request_without_auth_header() {
+        let (url, mut rx) = spawn_capture_server().await;
+        make_transport(Auth::GcpIdToken {
+            header: "Authorization".to_string(),
+            fixed_audience: None,
+            provider: Box::new(MockTokenProvider::err("simulated failure")),
+        })
+        .send(&HttpAddress { url }, &serde_json::json!({}))
+        .await;
+        let headers = rx.recv().await.expect("delivery target received no request");
+        assert!(
+            !headers.contains_key("authorization"),
+            "expected no Authorization header on token failure"
         );
     }
 }

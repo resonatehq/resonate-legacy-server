@@ -454,9 +454,11 @@ async fn post(server: &str, kind: &str, token: Option<&str>, data: Value) -> Res
 
     let body = build_envelope(kind, &gen_corr_id(), token, data);
 
-    let resp = client
-        .post(&url)
-        .json(&body)
+    let mut req = client.post(&url).json(&body);
+    if let Some(t) = token {
+        req = req.header("Authorization", format!("Bearer {}", t));
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Connection error: {}", e))?;
